@@ -1,13 +1,23 @@
 from crewai import Crew, Process
 from crew.tasks import create_parse_task, create_plan_task, create_execute_task, create_confirm_task
 from crew.agents import create_requirement_parser, create_db_planner, create_sql_executor, create_result_confirmer
+from crew.crew_event_logger import CrewConfigManager
 from tools.safe_tool_loader import SafeToolLoader
 import logging
 
 logger = logging.getLogger(__name__)
 
+# 글로벌 이벤트 훅 등록 (한 번만 실행)
+_event_manager = None
+
 def create_crew(tool_names=None):
+    global _event_manager
     logger.info(f"create_crew 호출됨 (tool_names={tool_names})")
+    
+    # 글로벌 이벤트 훅 등록 (한 번만)
+    if _event_manager is None:
+        _event_manager = CrewConfigManager()
+        logger.info("🎯 CrewAI 글로벌 이벤트 훅 등록 완료")
     
     # 동적 툴 로딩
     loader = SafeToolLoader()
@@ -33,7 +43,7 @@ def create_crew(tool_names=None):
     # 태스크 간 context 연결
     plan_task.context = [parse_task]
     execute_task.context = [plan_task]
-    confirm_task.context = [execute_task]
+    confirm_task.context = [parse_task, execute_task]  # RequirementParser와 SQLExecutor 결과 모두 받음
     
     return Crew(
         agents=[requirement_parser, db_planner, sql_executor, result_confirmer],

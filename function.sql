@@ -10,7 +10,7 @@ BEGIN
       SELECT *
         FROM todolist
        WHERE status ='IN_PROGRESS'
-         AND (agent_mode = 'COMPLETED' AND draft_status IS NULL AND agent_orch = 'crewai-action')
+         AND (agent_mode = 'COMPLETE' AND draft_status IS NULL AND agent_orch = 'crewai-action')
        ORDER BY start_date
        LIMIT p_limit
        FOR UPDATE SKIP LOCKED
@@ -50,3 +50,23 @@ $$ LANGUAGE plpgsql STABLE;
 -- 익명(anon) 역할에 실행 권한 부여
 GRANT EXECUTE ON FUNCTION public.action_fetch_previous_output(text, timestamp) TO anon;
 GRANT EXECUTE ON FUNCTION public.action_fetch_pending_task(integer, text) TO anon;
+
+-- 3) 결과 저장 (agent_mode=COMPLETE 전용)
+CREATE OR REPLACE FUNCTION public.action_save_task_result(
+  p_todo_id uuid,
+  p_payload jsonb
+)
+RETURNS void AS $$
+BEGIN
+  -- 최종 결과만 존재하므로 바로 완료 처리
+  UPDATE todolist
+     SET output       = p_payload,
+         status       = 'SUBMITTED',
+         draft_status = 'COMPLETED',
+         consumer     = NULL
+   WHERE id = p_todo_id;
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
+-- 익명(anon) 역할에 실행 권한 부여
+GRANT EXECUTE ON FUNCTION public.action_save_task_result(uuid, jsonb) TO anon;

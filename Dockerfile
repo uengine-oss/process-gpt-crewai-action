@@ -1,17 +1,32 @@
 FROM python:3.11.9-slim
 
+# 1. Set timezone to Asia/Seoul
 ENV TZ=Asia/Seoul
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      tzdata \
+      curl \
+      gnupg \
+      build-essential \
+ && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+ && echo $TZ > /etc/timezone \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
-    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+# 2. Install Node.js 18.x and Supabase MCP Server globally
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends nodejs \
+ && npm install -g @supabase/mcp-server-supabase@latest \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
+# 3. Python 앱 설치
 WORKDIR /app
-
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 4. 애플리케이션 코드 복사 및 실행
 COPY . .
-
 EXPOSE 8000
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"] 
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

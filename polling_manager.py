@@ -5,13 +5,15 @@ import os
 import sys
 import traceback
 from typing import Optional, Dict
+from crew.crew_event_logger import CrewAIEventLogger
 from database import (
     initialize_db, 
     fetch_pending_task, 
     fetch_task_status,
     update_task_completed,
     fetch_previous_output,
-    fetch_participants_info
+    fetch_participants_info,
+    fetch_form_types
 )
 
 # ============================================================================
@@ -74,24 +76,31 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     todo_id = row['id']
     proc_inst_id = row.get("proc_inst_id")
     start_date = row.get("start_date")
-    print("디버깅 proc_inst_id 정보", proc_inst_id)
-    print("디버깅 start_date 정보", start_date)
     user_request = await fetch_previous_output(proc_inst_id, start_date)
-    print("디버깅 user_request 정보", user_request)
     task_instructions = row.get("description")
-    print("디버깅 task_instructions 정보", task_instructions)
     user_ids = row.get("user_id")
+    tool_val = row.get("tool", "")
+    tenant_id = str(row.get("tenant_id", ""))
+    
+    # 사용자 및 에이전트 정보
     tools = None
     if user_ids:
         participants = await fetch_participants_info(user_ids)
         agent_list = participants.get("agent_info") or []
         if agent_list:
             tools = agent_list[0].get("tools")
+    
+    # 폼 타입 정보 조회
+    form_id, form_types = await fetch_form_types(tool_val, tenant_id)
+    
     return {
         "todo_id": todo_id,
         "user_request": user_request,
         "task_instructions": task_instructions,
         "tools": tools,
+        "form_id": form_id,
+        "form_types": form_types,
+        "proc_inst_id": proc_inst_id,
     }
 
 # ============================================================================
@@ -118,13 +127,18 @@ async def _execute_worker_process(inputs: Dict, todo_id: int):
         await current_process.wait()
         if not watch_task.done():
             watch_task.cancel()
-        
-        # 종료 결과 로그
-        _log_worker_result()
-        
-        # 워커가 정상적으로 완료되었으면 상태 업데이트
-        if current_process.returncode == 0 and not worker_terminated_by_us:
-            await update_task_completed(todo_id)
+            
+        ev = CrewAIEventLogger()
+        ev.emit_event(
+            event_type="crew_completed",
+            data={},
+            job_id="CREW_FINISHED",
+            crew_type="crew",
+            todo_id=todo_id,
+            proc_inst_id=inputs.get("proc_inst_id")
+        )
+        _log_worker_result()        
+        await update_task_completed(todo_id)
         
     except Exception as e:
         _handle_error("워커실행", e)
