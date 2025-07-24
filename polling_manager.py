@@ -75,8 +75,8 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     """작업 입력 데이터 준비"""
     todo_id = row['id']
     proc_inst_id = row.get("proc_inst_id")
-    start_date = row.get("start_date")
-    user_request = await fetch_previous_output(proc_inst_id, start_date)
+    current_activity_name = row.get("activity_name", "")
+    all_outputs = await fetch_previous_output(proc_inst_id)
     task_instructions = row.get("description")
     user_ids = row.get("user_id")
     tool_val = row.get("tool", "")
@@ -95,7 +95,8 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     
     return {
         "todo_id": todo_id,
-        "user_request": user_request,
+        "current_activity_name": current_activity_name,  # 현재 처리 중인 activity_name
+        "all_previous_outputs": all_outputs,  # activity_name을 키로 하는 모든 완료된 데이터
         "task_instructions": task_instructions,
         "tools": tools,
         "form_id": form_id,

@@ -73,7 +73,8 @@ async def main_async(inputs: dict):
     
     # 크루에 필요한 모든 inputs 전달
     crew_inputs = {
-        "user_request": inputs.get("user_request", ""),
+        "current_activity_name": inputs.get("current_activity_name", ""),
+        "all_previous_outputs": inputs.get("all_previous_outputs", {}),
         "task_instructions": inputs.get("task_instructions", ""),
         "form_types": inputs.get("form_types", {})
     }

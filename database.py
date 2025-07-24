@@ -87,18 +87,24 @@ async def update_task_completed(todo_id: str) -> None:
     except Exception as e:
         _handle_db_error("작업완료업데이트", e)
 
-async def fetch_previous_output(proc_inst_id: str, start_date: str) -> Optional[dict]:
-    """이전 단계 output 조회 (proc_inst_id와 start_date 기준)"""
+async def fetch_previous_output(proc_inst_id: str) -> Dict[str, Any]:
+    """완료된 모든 output 조회 (proc_inst_id 기준) - activity_name을 키로 하는 딕셔너리 반환"""
     try:
         supabase = get_db_client()
         resp = supabase.rpc(
-            'action_fetch_previous_output',
-            {'p_proc_inst_id': proc_inst_id, 'p_start_date': start_date}
+            'action_fetch_done_data',
+            {'p_proc_inst_id': proc_inst_id}
         ).execute()
-        # RPC 함수가 jsonb를 직접 반환하므로 resp.data가 바로 결과
-        return resp.data if resp.data else None
+        activity_outputs = {}
+        for row in (resp.data or []):
+            output = row.get('output')
+            if output and isinstance(output, dict):
+                # output 객체 안의 각 키가 activity_name, 값이 실제 output
+                for activity_name, activity_output in output.items():
+                    activity_outputs[activity_name] = activity_output
+        return activity_outputs
     except Exception as e:
-        _handle_db_error("이전출력조회", e)
+        _handle_db_error("완료된출력조회", e)
 
 
 # ============================================================================

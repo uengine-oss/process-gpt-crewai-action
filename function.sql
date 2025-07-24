@@ -47,9 +47,28 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
+-- 2) 완료된 데이터 조회 (activity_name을 키로 하는 output 반환)
+CREATE OR REPLACE FUNCTION public.action_fetch_done_data(
+  p_proc_inst_id text
+)
+RETURNS TABLE (
+  activity_name text,
+  output jsonb
+)
+LANGUAGE SQL
+AS $$
+  SELECT t.activity_name, t.output
+    FROM todolist AS t
+   WHERE t.proc_inst_id = p_proc_inst_id
+     AND t.status = 'DONE'
+     AND t.output IS NOT NULL
+   ORDER BY t.start_date DESC
+$$;
+
 -- 익명(anon) 역할에 실행 권한 부여
 GRANT EXECUTE ON FUNCTION public.action_fetch_previous_output(text, timestamp) TO anon;
 GRANT EXECUTE ON FUNCTION public.action_fetch_pending_task(integer, text) TO anon;
+GRANT EXECUTE ON FUNCTION public.fetch_done_data(text) TO anon;
 
 -- 3) 결과 저장 (agent_mode=COMPLETE 전용)
 CREATE OR REPLACE FUNCTION public.action_save_task_result(
