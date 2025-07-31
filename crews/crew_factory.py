@@ -9,22 +9,29 @@ from utils.logger import log
 # 글로벌 이벤트 훅 등록 (한 번만 실행)
 _event_manager = None
 
-# LLM 초기화
-llm = ChatOpenAI(model="gpt-4.1", openai_api_key=settings.openai_api_key)
+# 매니저 LLM 인스턴스 생성
+manager_llm = ChatOpenAI(
+    model="gpt-4.1",
+    temperature=0.1,
+    api_key=settings.openai_api_key
+)
 
 class AgentWithProfile(Agent):
-    # Pydantic 모델 필드로 추가됩니다
     name: Optional[str] = None
 
 def create_dynamic_agent(agent_info: dict, tools: list) -> AgentWithProfile:
     """에이전트 정보를 바탕으로 동적으로 Agent 객체 생성"""
+
+    model = agent_info.get("model", "openai/gpt-4.1")  # 기본값 설정
+    log(f"에이전트 생성: {agent_info.get('role', 'Unknown')} (모델: {model})")
+    
     return AgentWithProfile(
         role=agent_info.get("role", "범용 AI 어시스턴트"),
         goal=agent_info.get("goal", "사용자 요청을 정확히 수행하는 것"),
         backstory=agent_info.get("backstory", "당신은 전문적이고 효율적인 AI 에이전트입니다. 주어진 작업을 정확하고 신속하게 처리하며, 사용자의 요구사항을 완벽히 이해하고 실행합니다."),
         name=agent_info.get("name", "범용 AI 어시스턴트"),
         tools=tools,
-        llm=llm,
+        llm=model,
         verbose=True,
         allow_delegation=True,
         allowed_agents=["schema_analyst", "sql_executor"]
@@ -39,9 +46,7 @@ def create_user_task(task_instructions: str, agent: Agent, form_types: dict = No
     task_description = f"""
 다음 사용자 요청을 완료해주세요:
 
-**작업 지시사항:** {task_instructions}
-
-**현재 처리 단계:** {current_activity_name}
+**작업 지시사항:** {task_instructions if not feedback_summary or feedback_summary.strip() == '없음' or feedback_summary.strip() == '' else '피드백 우선 - 작업 지시사항 무시'}
 
 **이전 작업 결과:** {output_summary if output_summary else '없음'}
 
@@ -57,14 +62,16 @@ def create_user_task(task_instructions: str, agent: Agent, form_types: dict = No
 - 각 에이전트의 전문 분야와 사용 가능한 툴을 고려하여 적절한 에이전트에게 작업을 분배하세요
 
 **최우선 플래닝 원칙:**
-- 피드백이 존재하는 경우, 작업 지시는 일단 미뤄두고, 반드시 해당 피드백을 가장 우선적으로 분석하고 이를 바탕으로 전체 작업 계획을 수립하세요
+- 피드백이 존재하는 경우, 작업 지시사항는 일단 무시하고, 반드시 해당 피드백을 가장 우선적으로 분석하고 이를 바탕으로 전체 작업 계획을 수립하세요
 - 피드백에서 지적된 문제점, 개선사항, 추가 요구사항을 모든 작업의 출발점으로 삼으세요
 
 **작업 수행 방법:**
-1. 사용 가능한 도구들을 활용하여 작업을 수행하세요
-2. 이전 작업 컨텍스트가 있다면 이를 참고하여 이전에 뭘 했는지, 어떤 피드백이 있었는지 파악하고 작업에 반영하세요
-3. 필요한 경우, 제공된 툴을 활용하여, 데이터베이스나 외부 시스템과 상호작용하세요
-4. **팀 에이전트들에게 적절한 작업을 위임하세요** - 각 에이전트의 전문 분야에 맞는 업무를 배분하고 협업하세요
+1. 전달된 데이터를 영어로 변환하거나, 왜곡하지 말고 그대로 사용하세요.
+1. 피드백이 없는 경우, 작업 지시사항을 분석하여, 어떤 작업을 해야하는지 나열하여, 계획을 세우세요.
+2. 사용 가능한 도구들을 활용하여 작업을 수행하세요
+3. 이전 작업 컨텍스트가 있다면 이를 참고하여 이전에 뭘 했는지 문맥 흐름을 파악하여, 작업에 반영하세요
+4. 필요한 경우, 제공된 툴을 활용하여, 데이터베이스나 외부 시스템과 상호작용하세요
+5. **팀 에이전트들에게 적절한 작업을 위임하세요** - 각 에이전트의 전문 분야에 맞는 업무를 배분하고 협업하세요
 5. 최종 결과는 사용자가 요청한 Form 타입 형식에 맞춰 제공하세요
 
 **중요 원칙:**
@@ -80,11 +87,32 @@ def create_user_task(task_instructions: str, agent: Agent, form_types: dict = No
         expected_output="""
 작업 완료 결과를 다음 형식으로 제공:
 
-1. **작업 수행 결과**: 실제 수행한 작업의 상세 내용
-2. **처리된 데이터**: 실제로 처리되거나 조회된 데이터
-3. **최종 결과**: 요청된 형식(폼 필드)에 맞춘 JSON 또는 구조화된 데이터
+## 최종 폼 결과 (JSON 형식)
+```json
+{
+  "폼_키1": "값1",
+  "폼_키2": "값2",
+  "폼_키3": "값3"
+}
+```
 
-모든 결과는 실제 도구 실행 결과를 바탕으로 해야 하며, 추측이나 가정은 포함하지 마세요.
+## 작업 상태 및 상세 정보
+
+**작업 성공 시:**
+- **성공 상태**: "SUCCESS" 
+- **처리된 작업 목록**: 실제 수행한 모든 작업의 상세 내용
+- **데이터 처리 결과**: 저장/수정/조회된 데이터의 구체적 내용
+- **변경 사항**: 무엇이 어떻게 변경되었는지 상세 설명
+- **최종 확인**: 요청사항이 모두 반영되었는지 검증 결과
+
+**작업 실패 시:**
+- **실패 상태**: "FAILED"
+- **실패 원인**: 구체적인 실패 이유와 오류 메시지
+- **실패 단계**: 어느 단계에서 실패했는지 명시
+- **시도한 작업**: 실패하기 전까지 시도한 작업들
+- **권장 해결방안**: 문제 해결을 위한 구체적 방법 제시
+
+모든 결과는 실제 도구 실행 결과를 바탕으로 하며, 추측이나 가정은 포함하지 마세요.
 """,
         agent=agent
     )
@@ -153,7 +181,7 @@ def create_crew(agent_info=None, task_instructions="", form_types=None, current_
         tasks=[task],
         process=Process.sequential,
         planning=True, 
-        manager_llm=llm,
+        manager_llm=manager_llm,
         verbose=True
     )
     
