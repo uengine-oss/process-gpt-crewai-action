@@ -1,17 +1,17 @@
 import asyncio
-import logging
 import json
 import os
 import sys
-import traceback
 from typing import Optional, Dict
-from crew.crew_event_logger import CrewAIEventLogger
-from database import (
+from utils.crew_event_logger import CrewAIEventLogger
+from utils.context_manager import summarize_async
+from utils.logger import log, handle_error
+from core.database import (
     initialize_db, 
     fetch_pending_task, 
     fetch_task_status,
     update_task_completed,
-    fetch_previous_output,
+    fetch_done_data,
     fetch_participants_info,
     fetch_form_types
 )
@@ -19,8 +19,6 @@ from database import (
 # ============================================================================
 # 설정 및 초기화
 # ============================================================================
-
-logger = logging.getLogger(__name__)
 
 # 글로벌 상태
 current_todo_id: Optional[int] = None
@@ -31,18 +29,9 @@ def initialize_connections():
     """데이터베이스 연결 초기화"""
     try:
         initialize_db()
-        logger.info("✅ 연결 초기화 완료")
+        log("연결 초기화 완료")
     except Exception as e:
-        logger.error(f"❌ 초기화 실패: {str(e)}")
-        logger.error(f"상세 정보: {traceback.format_exc()}")
-        raise
-
-def _handle_error(operation: str, error: Exception) -> None:
-    """통합 에러 처리"""
-    error_msg = f"❌ [{operation}] 오류 발생: {str(error)}"
-    logger.error(error_msg)
-    logger.error(f"상세 정보: {traceback.format_exc()}")
-    raise Exception(f"{operation} 실패: {error}")
+        handle_error("초기화", e)
 
 # ============================================================================
 # 작업 처리 메인 로직
@@ -56,14 +45,16 @@ async def process_new_task(row: Dict):
     todo_id = row['id']
     
     try:
-        logger.info(f"🆕 새 작업 처리 시작: id={todo_id}")
+        log(f"새 작업 처리 시작: id={todo_id}")
         
-        # 작업 데이터 준비 및 워커 실행
+        # 작업 데이터 준비
         inputs = await _prepare_task_inputs(row)
+        
+        # 워커 실행
         await _execute_worker_process(inputs, todo_id)
         
     except Exception as e:
-        _handle_error("작업처리", e)
+        handle_error("작업처리", e)
         
     finally:
         # 글로벌 상태 초기화
@@ -76,32 +67,31 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     todo_id = row['id']
     proc_inst_id = row.get("proc_inst_id")
     current_activity_name = row.get("activity_name", "")
-    all_outputs = await fetch_previous_output(proc_inst_id)
+    all_outputs, feedbacks, drafts = await fetch_done_data(proc_inst_id)
     task_instructions = row.get("description")
-    user_ids = row.get("user_id")
+    agent_ids = row.get("user_id")  # DB 컬럼명은 user_id이지만 변수명은 agent_ids로 사용
     tool_val = row.get("tool", "")
     tenant_id = str(row.get("tenant_id", ""))
-    
-    # 사용자 및 에이전트 정보
-    tools = None
-    if user_ids:
-        participants = await fetch_participants_info(user_ids)
-        agent_list = participants.get("agent_info") or []
-        if agent_list:
-            tools = agent_list[0].get("tools")
-    
-    # 폼 타입 정보 조회
+    _, agent_list = await fetch_participants_info(agent_ids)
     form_id, form_types = await fetch_form_types(tool_val, tenant_id)
+    
+    # 컨텍스트 요약 - 별도 처리
+    if all_outputs or feedbacks or drafts:
+        output_summary, feedback_summary = await summarize_async(all_outputs, feedbacks, drafts)
+    else:
+        output_summary, feedback_summary = "", ""
     
     return {
         "todo_id": todo_id,
-        "current_activity_name": current_activity_name,  # 현재 처리 중인 activity_name
-        "all_previous_outputs": all_outputs,  # activity_name을 키로 하는 모든 완료된 데이터
+        "current_activity_name": current_activity_name,
         "task_instructions": task_instructions,
-        "tools": tools,
+        "agent_info": agent_list,
+        "tenant_id": tenant_id,
         "form_id": form_id,
         "form_types": form_types,
         "proc_inst_id": proc_inst_id,
+        "output_summary": output_summary,
+        "feedback_summary": feedback_summary,
     }
 
 # ============================================================================
@@ -123,7 +113,7 @@ async def _execute_worker_process(inputs: Dict, todo_id: int):
         
         # 취소 상태 감시 및 워커 대기
         watch_task = asyncio.create_task(_watch_cancel_status())
-        logger.info(f"✅ 워커 시작 (PID={current_process.pid})")
+        log(f"워커 시작 (PID={current_process.pid})")
         
         await current_process.wait()
         if not watch_task.done():
@@ -142,16 +132,16 @@ async def _execute_worker_process(inputs: Dict, todo_id: int):
         await update_task_completed(todo_id)
         
     except Exception as e:
-        _handle_error("워커실행", e)
+        handle_error("워커실행", e)
 
 def _log_worker_result():
     """워커 종료 결과 로그"""
     if worker_terminated_by_us:
-        logger.info(f"🛑 워커 사용자 중단됨 (PID={current_process.pid})")
+        log(f"워커 사용자 중단됨 (PID={current_process.pid})")
     elif current_process.returncode != 0:
-        logger.error(f"❌ 워커 비정상 종료 (code={current_process.returncode})")
+        print(f"❌ 워커 비정상 종료 (code={current_process.returncode})", flush=True)
     else:
-        logger.info(f"✅ 워커 정상 종료 (PID={current_process.pid})")
+        log(f"워커 정상 종료 (PID={current_process.pid})")
 
 async def _watch_cancel_status():
     """워커 취소 상태 감시"""
@@ -167,11 +157,11 @@ async def _watch_cancel_status():
         try:
             draft_status = await fetch_task_status(todo_id)
             if draft_status in ('CANCELLED', 'FB_REQUESTED'):
-                logger.info(f"🛑 draft_status={draft_status} 감지 (id={todo_id}) → 워커 종료")
+                log(f"draft_status={draft_status} 감지 (id={todo_id}) → 워커 종료")
                 terminate_current_worker()
                 break
         except Exception as e:
-            logger.error(f"❌ 취소 상태 조회 실패 (id={todo_id}): {str(e)}")
+            handle_error("취소상태조회", e)
 
 def terminate_current_worker():
     """현재 실행 중인 워커 프로세스 종료"""
@@ -180,9 +170,9 @@ def terminate_current_worker():
     if current_process and current_process.returncode is None:
         worker_terminated_by_us = True
         current_process.terminate()
-        logger.info(f"✅ 워커 프로세스 종료 시그널 전송 (PID={current_process.pid})")
+        log(f"워커 프로세스 종료 시그널 전송 (PID={current_process.pid})")
     else:
-        logger.warning("⚠️ 종료할 워커 프로세스가 없습니다.")
+        log("종료할 워커 프로세스가 없습니다")
 
 # ============================================================================
 # 폴링 실행
@@ -190,17 +180,15 @@ def terminate_current_worker():
 
 async def start_todolist_polling(interval: int = 7):
     """새 작업 처리 폴링 시작"""
-    logger.info("🚀 TodoList 폴링 시작")
+    log("TodoList 폴링 시작")
     
     while True:
         try:
             row = await fetch_pending_task()
             if row:
-                print("디버깅 row 정보", row)
                 await process_new_task(row)
                 
         except Exception as e:
-            logger.error(f"❌ 폴링 실행 실패: {str(e)}")
-            logger.error(f"상세 정보: {traceback.format_exc()}")
+            handle_error("폴링실행", e)
             
         await asyncio.sleep(interval)

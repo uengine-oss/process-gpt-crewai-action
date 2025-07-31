@@ -1,189 +1,190 @@
 import os
-import json
-import logging
-import time
-import shutil
 import subprocess
-from pathlib import Path
+import time
+from typing import List
+import anyio
 from mcp.client.stdio import StdioServerParameters
 from crewai_tools import MCPServerAdapter
-# ============================================================================
-# 설정 및 초기화
-# ============================================================================
+from core.database import fetch_tenant_mcp_config
+from .knowledge_manager import Mem0Tool, MementoTool
+from utils.logger import log, handle_error
 
-# 로거 설정
-logger = logging.getLogger(__name__)
 
 # ============================================================================
 # 도구 로더 클래스
 # ============================================================================
 
 class SafeToolLoader:
-    """MCP 기반 툴 로더 (로컬 STDIO 방식) - 여러 서버 설정 지원"""
+    """도구 로더 클래스"""
+    
+    def __init__(self, tenant_id: str = None, user_id: str = None):
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+        # 직접 선언한 도구들
+        self.local_tools = ["mem0", "memento"]
+        log(f"SafeToolLoader 초기화 완료 (tenant_id: {tenant_id}, user_id: {user_id})")
 
-    def __init__(self):
-        # mcp.json 로드 및 allowed_tools 초기화
-        config_path = Path(__file__).resolve().parents[1] / "config" / "mcp.json"
-        try:
-            with open(config_path, "r") as f:
-                cfg = json.load(f)
-            self.config = cfg
-            # mcpServers 키 목록을 허용 도구로 사용
-            self.allowed_tools = list(cfg.get("mcpServers", {}).keys())
-            logger.info(f"✅ SafeToolLoader 초기화 완료 (허용 도구: {self.allowed_tools})")
-            print(f"🔧 SafeToolLoader 초기화: {self.allowed_tools}")
-        except Exception as e:
-            logger.error(f"❌ SafeToolLoader config 로드 실패: {e}")
-            print(f"❌ SafeToolLoader config 로드 실패: {e}")
-            self.config = {"mcpServers": {}}
-            self.allowed_tools = []
-
-    def _find_npx_command(self):
-        """Windows에서 npx 명령어 경로를 찾습니다."""
-        possible_commands = ["npx", "npx.cmd", "npx.ps1"]
-        
-        for cmd in possible_commands:
-            if shutil.which(cmd):
-                logger.info(f"✅ npx 명령어 발견: {cmd}")
-                return cmd
-                
-        # PATH에서 찾지 못한 경우 일반적인 설치 경로 확인
-        common_paths = [
-            os.path.expanduser("~/AppData/Roaming/npm/npx.cmd"),
-            "C:/Program Files/nodejs/npx.cmd",
-            "C:/Program Files (x86)/nodejs/npx.cmd"
-        ]
-        
-        for path in common_paths:
-            if os.path.exists(path):
-                logger.info(f"✅ npx 경로 발견: {path}")
-                return path
-                
-        logger.error("❌ npx 명령어를 찾을 수 없습니다. Node.js가 설치되어 있고 PATH에 추가되어 있는지 확인하세요.")
-        return None
-
-    def warmup_server(self, server_key):
-        """MCP 서버 사전 웜업 (패키지 다운로드 및 준비)"""
-        try:
-            logger.info(f"🔥 {server_key} 서버 웜업 시작...")
-            print(f"🔥 {server_key} 서버 웜업 시작...")
-            server_cfg = self.config.get("mcpServers", {}).get(server_key, {})
+    def warmup_server(self, server_key: str):
+        """npx 기반 서버의 패키지를 미리 캐시에 저장해 실제 실행을 빠르게."""
+        cfg = self._load_mcp_config_from_db(server_key)
+        if not cfg or cfg.get("command") != "npx":
+            return
             
-            if server_cfg.get("command") == "npx":
-                # npx 명령어 경로 확인
-                npx_cmd = self._find_npx_command()
-                if not npx_cmd:
-                    logger.warning(f"⚠️ npx를 찾을 수 없어 {server_key} 웜업 건너뜀")
-                    print(f"⚠️ npx를 찾을 수 없어 {server_key} 웜업 건너뜀")
-                    return
-                
-                args = server_cfg.get("args", [])
-                if args and args[0] == "-y":
-                    package = args[1] if len(args) > 1 else ""
-                    logger.info(f"📦 {package} 패키지 캐시 확인 중...")
-                    print(f"📦 {package} 패키지 캐시 확인 중...")
-                    
-                    # 캐시 확인을 위한 빠른 테스트
-                    result = subprocess.run([npx_cmd, "-y", package, "--help"], 
-                                          capture_output=True, timeout=10, text=True, 
-                                          shell=True)  # Windows에서 shell=True 추가
-                    
-                    if result.returncode == 0:
-                        logger.info(f"✅ {package} 패키지 캐시됨 (빠른 로딩 가능)")
-                        print(f"✅ {package} 패키지 캐시됨")
-                    else:
-                        logger.info(f"📥 {package} 패키지 다운로드 중... (첫 실행)")
-                        print(f"📥 {package} 패키지 다운로드 중...")
-                        # 실제 다운로드 (더 긴 타임아웃)
-                        subprocess.run([npx_cmd, "-y", package, "--help"], 
-                                     capture_output=True, timeout=60, shell=True)
-                        logger.info(f"✅ {package} 패키지 준비 완료")
-                        print(f"✅ {package} 패키지 준비 완료")
-                    
+        npx = self._find_npx_command()
+        if not npx:
+            return
+            
+        args = cfg.get("args", [])
+        if not (args and args[0] == "-y"):
+            return
+            
+        pkg = args[1]
+        
+        # 캐시 확인용 빠른 도움말 호출 (10초 제한)
+        try:
+            subprocess.run([npx, "-y", pkg, "--help"], capture_output=True, timeout=10, shell=True)
+            return
         except subprocess.TimeoutExpired:
-            logger.warning(f"⚠️ {server_key} 웜업 타임아웃 (패키지 다운로드 중일 수 있음)")
-            print(f"⚠️ {server_key} 웜업 타임아웃")
-        except Exception as e:
-            logger.warning(f"⚠️ {server_key} 웜업 실패 (무시됨): {e}")
-            print(f"⚠️ {server_key} 웜업 실패: {e}")
+            pass
+        except Exception:
+            pass
+            
+        # 캐시 없으면 패키지 설치 (60초 제한)
+        try:
+            subprocess.run([npx, "-y", pkg, "--help"], capture_output=True, timeout=60, shell=True)
+        except:
+            pass
 
-    def create_tools_from_names(self, tool_names):
-        """지정된 도구 이름으로 MCP 툴을 로드합니다."""
+    def _find_npx_command(self) -> str:
+        """npx 명령어 경로 찾기"""
+        try:
+            import shutil
+            npx_path = shutil.which("npx") or shutil.which("npx.cmd")
+            if npx_path:
+                return npx_path
+        except Exception:
+            pass
+        return "npx"  # 기본값
+
+    def create_tools_from_names(self, tool_names: List[str]) -> List:
+        """tool_names 리스트에서 실제 Tool 객체들 생성"""
         if isinstance(tool_names, str):
-            # 쉼표로 구분된 문자열인 경우 분리하여 리스트로 변환
-            tool_names = [t.strip() for t in tool_names.split(',') if t.strip()]
-
+            tool_names = [tool_names]
+        log(f"도구 생성 요청: {tool_names}")
+        
         tools = []
+        
+        # mem0, memento는 항상 기본 로드
+        tools.extend(self._load_mem0())
+        tools.extend(self._load_memento())
+        
+        # 요청된 도구들 처리
         for name in tool_names:
             key = name.strip().lower()
-            # '-mcp' 접미사 제거하여 설정 키와 매칭
-            server_key = key[:-4] if key.endswith("-mcp") else key
-            if server_key in self.allowed_tools:
-                # 사전 웜업 실행
-                self.warmup_server(server_key)
-                tools.extend(self._load_mcp_server(server_key))
+            if key in self.local_tools:
+                continue  # 이미 기본 로드됨
             else:
-                logger.warning(f"⚠️ 지원하지 않는 도구 요청: {name}")
+                # 패키지 캐싱을 위해 먼저 웜업 수행
+                self.warmup_server(key)
+                # 나머지는 모두 MCP 도구로 처리
+                tools.extend(self._load_mcp_tool(key))
+        
+        log(f"총 {len(tools)}개 도구 생성 완료")
         return tools
 
-    def _load_mcp_server(self, server_key):
-        """지정된 MCP 서버(server_key) 도구 로드 (로컬 STDIO 방식)"""
+    # ============================================================================
+    # 개별 도구 로더들
+    # ============================================================================
+
+    def _load_mem0(self) -> List:
+        """mem0 도구 로드 - 에이전트별 메모리"""
+        try:
+            return [Mem0Tool(tenant_id=self.tenant_id, user_id=self.user_id)]
+        except Exception as e:
+            handle_error("mem0로드", e)
+            return []
+
+    def _load_memento(self) -> List:
+        """memento 도구 로드"""
+        try:
+            return [MementoTool(tenant_id=self.tenant_id)]
+        except Exception as e:
+            handle_error("memento로드", e)
+            return []
+
+    def _load_mcp_tool(self, tool_name: str) -> List:
+        """MCP 도구 로드 (timeout & retry 지원)"""
+        self._apply_anyio_patch()
+        
+        server_cfg = self._load_mcp_config_from_db(tool_name)
+        if not server_cfg:
+            return []
+        
+        env_vars = os.environ.copy()
+        env_vars.update(server_cfg.get("env", {}))
+        timeout = server_cfg.get("timeout", 40)
+
         max_retries = 2
         retry_delay = 5
-        
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"📡 {server_key}-mcp 서버 로드 시도 {attempt + 1}/{max_retries}")
-                print(f"📡 {server_key}-mcp 서버 로드 시도 {attempt + 1}/{max_retries}")
-                
-                server_cfg = self.config.get("mcpServers", {}).get(server_key, {})
-                
-                # Windows에서 npx 명령어 처리
-                command = server_cfg.get("command")
-                if command == "npx":
-                    npx_cmd = self._find_npx_command()
-                    if not npx_cmd:
-                        raise Exception("npx 명령어를 찾을 수 없습니다")
-                    command = npx_cmd
-                
-                # 환경 변수 병합 (Service Role Key 포함)
-                env_vars = os.environ.copy()
-                env_vars.update(server_cfg.get("env", {}))
-                # 타임아웃 옵션 읽기 (초 단위)
-                timeout = server_cfg.get("timeout", 30)  # 기본값 30초
-                
-                logger.info(f"⏱️ 타임아웃 설정: {timeout}초")
-                print(f"⏱️ 타임아웃: {timeout}초")
-                logger.info(f"🔧 명령어: {command} {' '.join(server_cfg.get('args', []))}")
-                print(f"🔧 명령어: {command} {' '.join(server_cfg.get('args', []))}")
-                
-                # StdioServerParameters 인자 설정
-                params_kwargs = {
-                    "command": command,
-                    "args": server_cfg.get("args", []),
-                    "env": env_vars
-                }
-                if timeout is not None:
-                    params_kwargs["timeout"] = timeout
 
-                params = StdioServerParameters(**params_kwargs)
+        for attempt in range(1, max_retries + 1):
+            try:
+                cmd = server_cfg["command"]
+                if cmd == "npx":
+                    cmd = self._find_npx_command() or cmd
                 
-                # MCPServerAdapter를 통해 툴 로드
+                params = StdioServerParameters(
+                    command=cmd,
+                    args=server_cfg.get("args", []),
+                    env=env_vars,
+                    timeout=timeout
+                )
+                
                 adapter = MCPServerAdapter(params)
-                logger.info(f"✅ {server_key}-mcp 도구 로드 성공 (timeout={timeout})")
-                print(f"✅ {server_key}-mcp 도구 로드 성공! 툴 개수: {len(adapter.tools)}")
+                log(f"{tool_name} MCP 로드 성공 (툴 {len(adapter.tools)}개): {[tool.name for tool in adapter.tools]}")
                 return adapter.tools
 
             except Exception as e:
-                logger.error(f"❌ [{server_key}-mcp 로드 시도 {attempt + 1}] 오류: {e}")
-                print(f"❌ [{server_key}-mcp 로드 시도 {attempt + 1}] 오류: {e}")
-                
-                if attempt < max_retries - 1:
-                    logger.info(f"⏳ {retry_delay}초 후 재시도...")
-                    print(f"⏳ {retry_delay}초 후 재시도...")
+                if attempt < max_retries:
                     time.sleep(retry_delay)
                 else:
-                    logger.error(f"❌ [{server_key}-mcp 로드] 모든 재시도 실패")
-                    print(f"❌ [{server_key}-mcp 로드] 모든 재시도 실패")
-                    
-        return []
+                    handle_error(f"{tool_name}MCP로드", e)
+                    return []
+
+    # ============================================================================
+    # 헬퍼 메서드들
+    # ============================================================================
+
+    def _apply_anyio_patch(self):
+        """anyio stderr 패치 적용"""
+        from anyio._core._subprocesses import open_process as _orig
+
+        async def patched_open_process(*args, **kwargs):
+            stderr = kwargs.get('stderr')
+            if not (hasattr(stderr, 'fileno') and stderr.fileno()):
+                kwargs['stderr'] = subprocess.PIPE
+            return await _orig(*args, **kwargs)
+
+        anyio.open_process = patched_open_process
+        anyio._core._subprocesses.open_process = patched_open_process
+
+    def _load_mcp_config_from_db(self, tool_name: str) -> dict:
+        """DB의 tenants 테이블에서 MCP 설정 로드"""
+        try:
+            if not self.tenant_id:
+                return {}
+            
+            mcp_config = fetch_tenant_mcp_config(self.tenant_id)
+            
+            if mcp_config:
+                tool_config = mcp_config.get('mcpServers', {}).get(tool_name, {})
+                if tool_config:
+                    return tool_config
+                else:
+                    return {}
+            else:
+                return {}
+                        
+        except Exception as e:
+            handle_error(f"{tool_name}DB설정로드", e)
+            return {}
