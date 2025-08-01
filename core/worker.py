@@ -6,13 +6,15 @@ import json
 import os
 import sys
 import asyncio
+
+# 프로젝트 루트 디렉토리를 Python 경로에 추가
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.append(project_root)
+
 from utils.context_manager import todo_id_var, proc_id_var
 from utils.crew_utils import convert_crew_output
-from utils.logger import log, handle_error
-
-# 현재 디렉토리를 Python 경로에 추가
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
+from utils.logger import log
 
 from crews.crew_factory import create_crew
 from core.database import initialize_db, save_task_result
@@ -57,18 +59,13 @@ async def main_async(inputs: dict):
     # 크루 실행
     result = crew.kickoff(inputs=crew_inputs)
     
-    # CrewOutput 객체를 JSON 직렬화 가능한 형태로 변환
-    converted_result = convert_crew_output(result)
-    
-    # 결과를 form_id로 감싸서 저장
+    # 최종 결과 변환 및 저장
     form_id = inputs.get("form_id")
     todo_id = inputs.get("todo_id")
-    
+    # form_id가 있으면 convert_crew_output에 넘겨 wrapper 적용
+    converted_result = convert_crew_output(result, form_id)
     if form_id and todo_id:
-        # form_id로 결과 감싸기 (이미 변환된 결과 사용)
-        wrapped_result = {form_id: converted_result}
-        # DB에 최종 결과 저장
-        await save_task_result(todo_id, wrapped_result)
+        await save_task_result(todo_id, converted_result)
         log(f"크루 실행 완료 및 결과 저장: {form_id}")
     else:
         log(f"크루 실행 완료: {converted_result}")

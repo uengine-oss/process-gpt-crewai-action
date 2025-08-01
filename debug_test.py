@@ -27,7 +27,7 @@ from utils.context_manager import todo_id_var, proc_id_var
 
 class DebugTester:
     def __init__(self):
-        self.todo_id = "ec00001f-d3d6-4d8e-b0d6-75b3829fb7c4"  # 실제 존재하는 todo_id로 변경 필요
+        self.todo_id = "43ae5a83-6d35-4938-a280-da08abac9691"  # 실제 존재하는 todo_id로 변경 필요
         self.client = None
         
     def setup(self):
