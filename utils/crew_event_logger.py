@@ -86,8 +86,16 @@ class CrewAIEventLogger:
             plan = item.get('plan', '')
             lines.append(f'## {idx}. {task}')
             lines.append('')
-            for line in plan.split('\n'):
-                lines.append(line)
+            
+            # plan이 리스트인 경우와 문자열인 경우를 모두 처리
+            if isinstance(plan, list):
+                for line in plan:
+                    lines.append(str(line))
+            elif isinstance(plan, str):
+                for line in plan.split('\n'):
+                    lines.append(line)
+            else:
+                lines.append(str(plan))
             lines.append('')
         return '\n'.join(lines).strip()
     

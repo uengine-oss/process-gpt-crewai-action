@@ -67,7 +67,7 @@ def create_user_task(task_instructions: str, agent: Agent, form_types: dict = No
 - 피드백이 있을 경우, 최우선적으로 처리해야하며, 최종 결과도 먼저 피드백에 맞게 제공한 뒤에, 폼 타입에 맞게 데이터도 함께 제공하세요
 
 **작업 수행 방법:**
-1. 전달된 데이터를 영어로 변환하거나, 왜곡하지 말고 그대로 사용하세요.
+1. 전달된 한글 데이터를 영어로 변환하거나, 왜곡하지 말고 그대로 사용하세요. (예 : 머그컵 → mug cup으로 변환하지말고, 머그컵 그대로 사용하세요)
 1. 피드백이 없는 경우, 작업 지시사항을 분석하여, 어떤 작업을 해야하는지 나열하여, 계획을 세우세요.
 2. 사용 가능한 도구들을 활용하여 작업을 수행하세요
 3. 이전 작업 컨텍스트가 있다면 이를 참고하여 이전에 뭘 했는지 문맥 흐름을 파악하여, 작업에 반영하세요
@@ -125,6 +125,7 @@ def create_crew(agent_info=None, task_instructions="", form_types=None, current_
     # 에이전트 정보 처리
     if not agent_info:
         agent_info = [{
+            "user_id": "default_user",
             "role": "범용 AI 어시스턴트", 
             "goal": "사용자의 요청을 정확하고 효율적으로 처리",
             "backstory": """당신은 다양한 도구를 활용할 수 있는 전문 AI 어시스턴트입니다. 

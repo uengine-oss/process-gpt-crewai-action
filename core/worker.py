@@ -65,7 +65,7 @@ async def main_async(inputs: dict):
     form_id = inputs.get("form_id")
     todo_id = inputs.get("todo_id")
     proc_inst_id = inputs.get("proc_inst_id")
-    converted_result = convert_crew_output(result, form_id)
+    pure_form_data, wrapped_result = convert_crew_output(result, form_id)
     
     if form_id and todo_id:
         event_logger = CrewAIEventLogger()
@@ -81,7 +81,7 @@ async def main_async(inputs: dict):
                 "role": "최종 결과 반환",
                 "name": "최종 결과 반환",
                 "goal": "요청된 폼 형식에 맞는 최종 결과를 반환합니다.",
-                "profile": "/images/chat-icon.png"
+                "agent_profile": "/images/chat-icon.png"
             },
             job_id=job_id,
             crew_type="action",
@@ -90,20 +90,20 @@ async def main_async(inputs: dict):
         )
         
         # 실제 결과 저장
-        await save_task_result(todo_id, converted_result)
+        await save_task_result(todo_id, wrapped_result)
         log(f"크루 실행 완료 및 결과 저장: {form_id}")
         
         # 결과 저장 완료 이벤트 발행 (save_task_result 직후)
         event_logger.emit_event(
             event_type="task_completed",
-            data={"final_result": converted_result},
+            data={"final_result": pure_form_data},
             job_id=job_id,
             crew_type="action",
             todo_id=str(todo_id),
             proc_inst_id=str(proc_inst_id)
         )
     else:
-        log(f"크루 실행 완료: {converted_result}")
+        log(f"크루 실행 완료: {wrapped_result}")
         log("form_id 또는 todo_id 없음 - DB 저장 생략")
 
 def main():
