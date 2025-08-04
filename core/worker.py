@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import asyncio
+import uuid
 
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,6 +16,7 @@ sys.path.append(project_root)
 from utils.context_manager import todo_id_var, proc_id_var
 from utils.crew_utils import convert_crew_output
 from utils.logger import log
+from utils.crew_event_logger import CrewAIEventLogger
 
 from crews.crew_factory import create_crew
 from core.database import initialize_db, save_task_result
@@ -62,11 +64,44 @@ async def main_async(inputs: dict):
     # 최종 결과 변환 및 저장
     form_id = inputs.get("form_id")
     todo_id = inputs.get("todo_id")
-    # form_id가 있으면 convert_crew_output에 넘겨 wrapper 적용
+    proc_inst_id = inputs.get("proc_inst_id")
     converted_result = convert_crew_output(result, form_id)
+    
     if form_id and todo_id:
+        event_logger = CrewAIEventLogger()
+        
+        # UUID 생성
+        job_uuid = str(uuid.uuid4())
+        job_id = f"action_{job_uuid}"
+        
+        # 결과 저장 시작 이벤트 발행 (save_task_result 직전)
+        event_logger.emit_event(
+            event_type="task_started",
+            data={
+                "role": "최종 결과 반환",
+                "name": "최종 결과 반환",
+                "goal": "요청된 폼 형식에 맞는 최종 결과를 반환합니다.",
+                "profile": "/images/chat-icon.png"
+            },
+            job_id=job_id,
+            crew_type="action",
+            todo_id=str(todo_id),
+            proc_inst_id=str(proc_inst_id)
+        )
+        
+        # 실제 결과 저장
         await save_task_result(todo_id, converted_result)
         log(f"크루 실행 완료 및 결과 저장: {form_id}")
+        
+        # 결과 저장 완료 이벤트 발행 (save_task_result 직후)
+        event_logger.emit_event(
+            event_type="task_completed",
+            data={"final_result": converted_result},
+            job_id=job_id,
+            crew_type="action",
+            todo_id=str(todo_id),
+            proc_inst_id=str(proc_inst_id)
+        )
     else:
         log(f"크루 실행 완료: {converted_result}")
         log("form_id 또는 todo_id 없음 - DB 저장 생략")
