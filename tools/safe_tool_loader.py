@@ -16,6 +16,7 @@ from utils.logger import log, handle_error
 
 class SafeToolLoader:
     """도구 로더 클래스"""
+    adapters = []  # MCPServerAdapter 인스턴스 등록
     
     def __init__(self, tenant_id: str = None, user_id: str = None):
         self.tenant_id = tenant_id
@@ -141,6 +142,7 @@ class SafeToolLoader:
                 )
                 
                 adapter = MCPServerAdapter(params)
+                SafeToolLoader.adapters.append(adapter)
                 log(f"{tool_name} MCP 로드 성공 (툴 {len(adapter.tools)}개): {[tool.name for tool in adapter.tools]}")
                 return adapter.tools
 
@@ -188,3 +190,13 @@ class SafeToolLoader:
         except Exception as e:
             handle_error(f"{tool_name}DB설정로드", e)
             return {}
+
+    @classmethod
+    def shutdown_all_adapters(cls):
+        """모든 MCPServerAdapter 연결 종료"""
+        for adapter in cls.adapters:
+            try:
+                adapter.stop()
+            except Exception as e:
+                handle_error("MCPServerAdapter_stop", e)
+        cls.adapters.clear()

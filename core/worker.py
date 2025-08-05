@@ -59,7 +59,11 @@ async def main_async(inputs: dict):
     }
     
     # 크루 실행
-    result = crew.kickoff(inputs=crew_inputs)
+    try:
+        result = crew.kickoff(inputs=crew_inputs)
+    finally:
+        from tools.safe_tool_loader import SafeToolLoader
+        SafeToolLoader.shutdown_all_adapters()
     
     # 최종 결과 변환 및 저장
     form_id = inputs.get("form_id")
