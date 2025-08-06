@@ -31,8 +31,7 @@ async def test_prepare_phase():
     1) todolist 테이블에서 실제 todo_id로 row를 가져와,
     2) _prepare_task_inputs가 올바른 dict 구조를 반환하는지 검증
     """
-    # 실제 존재하는 todo_id 사용 - 테스트 전에 DB에서 확인 필요
-    todo_id = "28f68ce5-9c64-4f32-ad1e-2be81a67b63b"
+    todo_id = "ec00001f-3d6-4d8e-b0d6-75b3829fb7c4"  # 실제 존재하는 todo_id로 변경 필요
     client = get_db_client()
     resp = (
         client
