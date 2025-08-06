@@ -31,7 +31,8 @@ async def test_prepare_phase():
     1) todolist 테이블에서 실제 todo_id로 row를 가져와,
     2) _prepare_task_inputs가 올바른 dict 구조를 반환하는지 검증
     """
-    todo_id = "ec00001f-d3d6-4d8e-b0d6-75b3829fb7c4"  # 실제 존재하는 todo_id로 변경 필요
+    # 실제 존재하는 todo_id 사용 - 테스트 전에 DB에서 확인 필요
+    todo_id = "28f68ce5-9c64-4f32-ad1e-2be81a67b63b"
     client = get_db_client()
     resp = (
         client
@@ -56,6 +57,20 @@ async def test_prepare_phase():
     
     # _prepare_task_inputs 실행 및 결과 검증
     inputs = await _prepare_task_inputs(row)
+    
+    # 🔍 디버깅: agent_info에서 실제 user_id 확인
+    agent_info = inputs.get('agent_info', [])
+    print(f"\n🔍 디버깅 - agent_info 상세:")
+    for i, agent in enumerate(agent_info):
+        print(f"  Agent {i+1}: id='{agent.get('id')}', role='{agent.get('role')}'")
+        
+        # mem0 검색 테스트
+        if agent.get('id'):
+            from tools.knowledge_manager import Mem0Tool
+            mem0_tool = Mem0Tool(tenant_id=agent.get('tenant_id'), user_id=agent.get('id'))
+            test_result = mem0_tool._run("orders 테이블에 주문 정보를 저장하고, product 테이블의 주문된 제품의 재고를 확인합니다.")
+            print(f"  💡 mem0 검색 결과: {len(test_result)}자 {'(지식있음)' if '지식이 없습니다' not in test_result else '(지식없음)'}")
+    print(f"🔍 디버깅 끝\n")
     print("\n" + "="*50)
     print("결과 검증:")
     print("="*50)
@@ -108,7 +123,8 @@ async def test_full_crew_phase():
     """
     CrewAI 전체 실행 흐름 테스트
     """
-    todo_id = "ec00001f-d3d6-4d8e-b0d6-75b3829fb7c4"  # 실제 존재하는 todo_id로 변경 필요
+    # 실제 존재하는 todo_id 사용 - 테스트 전에 DB에서 확인 필요
+    todo_id = "28f68ce5-9c64-4f32-ad1e-2be81a67b63b"
     client = get_db_client()
     row = (
         client
@@ -171,3 +187,43 @@ async def test_full_crew_phase():
         assert False, f"❌ 크루 실행 실패: {', '.join(problems)}"
     
     print(f"✓ 전체 크루 실행 성공")
+
+# 디버그 실행을 위한 메인 함수들
+async def debug_prepare_phase():
+    """디버그용 prepare phase 테스트"""
+    print("🚀 Prepare Phase 디버그 테스트 시작...")
+    await test_prepare_phase()
+    print("✅ Prepare Phase 디버그 테스트 완료!")
+
+async def debug_full_crew_phase():
+    """디버그용 full crew phase 테스트"""
+    print("🚀 Full Crew Phase 디버그 테스트 시작...")
+    await test_full_crew_phase()
+    print("✅ Full Crew Phase 디버그 테스트 완료!")
+
+async def debug_all_tests():
+    """모든 테스트 디버그 실행"""
+    print("🚀 전체 테스트 디버그 실행 시작...")
+    try:
+        await debug_prepare_phase()
+        print("\n" + "="*60 + "\n")
+        await debug_full_crew_phase()
+        print("\n🎉 모든 테스트 성공적으로 완료!")
+    except Exception as e:
+        print(f"\n❌ 테스트 실행 중 오류 발생: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    import asyncio
+    
+    print("=" * 60)
+    print("🔧 Real DB Flow 디버그 테스트")
+    print("=" * 60)
+    
+    # 개별 테스트 실행 (원하는 테스트만 주석 해제)
+    # asyncio.run(debug_prepare_phase())
+    # asyncio.run(debug_full_crew_phase())
+    
+    # 전체 테스트 실행
+    asyncio.run(debug_all_tests())

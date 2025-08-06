@@ -81,7 +81,7 @@ class Mem0Tool(BaseTool):
             hits = results.get("results", [])
             
             # hybrid 필터링 적용: threshold=0.6, 최소 5개 보장
-            THRESHOLD = 0.6
+            THRESHOLD = 0.5
             MIN_RESULTS = 5
             # 1) 유사도 내림차순 정렬
             hits_sorted = sorted(hits, key=lambda x: x.get("score", 0), reverse=True)
