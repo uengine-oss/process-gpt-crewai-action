@@ -184,6 +184,7 @@ async def start_todolist_polling(interval: int = 7):
     
     while True:
         try:
+            print("todolist 폴링 시도")
             row = await fetch_pending_task()
             if row:
                 await process_new_task(row)
