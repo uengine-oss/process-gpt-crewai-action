@@ -31,7 +31,7 @@ async def test_prepare_phase():
     1) todolist 테이블에서 실제 todo_id로 row를 가져와,
     2) _prepare_task_inputs가 올바른 dict 구조를 반환하는지 검증
     """
-    todo_id = "ec00001f-3d6-4d8e-b0d6-75b3829fb7c4"  # 실제 존재하는 todo_id로 변경 필요
+    todo_id = "311407d7-309a-41e1-b512-ddea7b11a879"  # 실제 존재하는 todo_id로 변경 필요
     client = get_db_client()
     resp = (
         client
@@ -97,8 +97,8 @@ async def test_prepare_phase():
     if not form_id:
         problems.append("form_id 없음")
     
-    form_types = inputs.get('form_types', {})
-    is_default = len(form_types) == 1 and form_types.get('type') == 'default'
+    form_types = inputs.get('form_types', [])
+    is_default = len(form_types) == 1 and form_types[0].get('type') == 'default' if form_types else False
     print(f"  form_types: {'❌ 기본값' if is_default else f'✓ {len(form_types)}개'} {form_types}")
     if is_default:
         problems.append("form_types 기본값")
@@ -123,7 +123,7 @@ async def test_full_crew_phase():
     CrewAI 전체 실행 흐름 테스트
     """
     # 실제 존재하는 todo_id 사용 - 테스트 전에 DB에서 확인 필요
-    todo_id = "28f68ce5-9c64-4f32-ad1e-2be81a67b63b"
+    todo_id = "311407d7-309a-41e1-b512-ddea7b11a879"
     client = get_db_client()
     row = (
         client
@@ -204,8 +204,8 @@ async def debug_all_tests():
     """모든 테스트 디버그 실행"""
     print("🚀 전체 테스트 디버그 실행 시작...")
     try:
-        await debug_prepare_phase()
-        print("\n" + "="*60 + "\n")
+        # await debug_prepare_phase()
+        # print("\n" + "="*60 + "\n")
         await debug_full_crew_phase()
         print("\n🎉 모든 테스트 성공적으로 완료!")
     except Exception as e:

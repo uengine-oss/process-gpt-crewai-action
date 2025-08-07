@@ -1,6 +1,6 @@
 import os
 from typing import Optional, List, Type
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 from crewai.tools import BaseTool
 from dotenv import load_dotenv
 from mem0 import Memory
@@ -31,6 +31,23 @@ CONNECTION_STRING = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{
 
 class KnowledgeQuerySchema(BaseModel):
     query: str = Field(..., description="검색할 지식 쿼리")
+    
+    @field_validator('query', mode='before')
+    @classmethod
+    def validate_query(cls, v):
+        if isinstance(v, dict):
+            # 딕셔너리가 전달된 경우 description 필드를 추출
+            if 'description' in v:
+                return v['description']
+            # 다른 키가 있는 경우 첫 번째 값을 사용
+            elif v:
+                return str(list(v.values())[0])
+            else:
+                return ""
+        elif isinstance(v, str):
+            return v
+        else:
+            return str(v)
 
 # ============================================================================
 # 지식 검색 도구

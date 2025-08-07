@@ -199,4 +199,5 @@ class SafeToolLoader:
                 adapter.stop()
             except Exception as e:
                 handle_error("MCPServerAdapter_stop", e)
+        log("모든 MCPServerAdapter 연결 종료 완료")
         cls.adapters.clear()
