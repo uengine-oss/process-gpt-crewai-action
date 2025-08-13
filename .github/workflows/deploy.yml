@@ -45,7 +45,7 @@ jobs:
           cd gitops-repo
           
           # Update crewai-action deployment image
-          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i dev/deployments/crewai-action-deployment.yaml
+          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i deployments/crewai-action-deployment.yaml
           
           echo "Updated image to: $IMAGE_NAME"
 
