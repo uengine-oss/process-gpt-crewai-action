@@ -11,6 +11,7 @@ from core.database import (
     fetch_pending_task, 
     fetch_task_status,
     update_task_completed,
+    update_task_error,
     fetch_done_data,
     fetch_participants_info,
     fetch_form_types
@@ -54,7 +55,9 @@ async def process_new_task(row: Dict):
         await _execute_worker_process(inputs, todo_id)
         
     except Exception as e:
-        handle_error("작업처리", e)
+        # 작업 단위 실패는 ERROR로 마킹하고 폴링은 지속
+        await update_task_error(todo_id)
+        handle_error("작업처리", e, raise_error=False)
         
     finally:
         # 글로벌 상태 초기화
@@ -67,7 +70,7 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     todo_id = row['id']
     proc_inst_id = row.get("proc_inst_id")
     current_activity_name = row.get("activity_name", "")
-    all_outputs, feedbacks, drafts = await fetch_done_data(proc_inst_id)
+    all_outputs = await fetch_done_data(proc_inst_id)
     task_instructions = row.get("description")
     agent_ids = row.get("user_id")  # DB 컬럼명은 user_id이지만 변수명은 agent_ids로 사용
     tool_val = row.get("tool", "")
@@ -75,11 +78,13 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     _, agent_list = await fetch_participants_info(agent_ids)
     form_id, form_types = await fetch_form_types(tool_val, tenant_id)
     
-    # 컨텍스트 요약 - 별도 처리
-    if all_outputs or feedbacks or drafts:
-        output_summary, feedback_summary = await summarize_async(all_outputs, feedbacks, drafts)
+    # 작업 타입에 따른 요약 처리
+    if row.get('task_type') == 'FB_REQUESTED':
+        current_feedback = row.get('feedback')
+        current_content = row.get('draft') or row.get('output')
+        output_summary, feedback_summary = await summarize_async(all_outputs, current_feedback, current_content)
     else:
-        output_summary, feedback_summary = "", ""
+        output_summary, feedback_summary = await summarize_async(all_outputs, None, None)
     
     return {
         "todo_id": todo_id,
@@ -118,7 +123,18 @@ async def _execute_worker_process(inputs: Dict, todo_id: int):
         await current_process.wait()
         if not watch_task.done():
             watch_task.cancel()
-            
+
+        # 종료 결과 처리: 오류/사용자중단/정상 종료 구분
+        if worker_terminated_by_us:
+            log(f"워커 사용자 중단됨 (PID={current_process.pid})")
+            return
+
+        if current_process.returncode != 0:
+            print(f"❌ 워커 비정상 종료 (code={current_process.returncode})", flush=True)
+            await update_task_error(todo_id)
+            return
+
+        # 정상 종료 시 완료 처리 및 이벤트 발행
         ev = CrewAIEventLogger()
         ev.emit_event(
             event_type="crew_completed",
@@ -128,11 +144,13 @@ async def _execute_worker_process(inputs: Dict, todo_id: int):
             todo_id=todo_id,
             proc_inst_id=inputs.get("proc_inst_id")
         )
-        _log_worker_result()        
+        log(f"워커 정상 종료 (PID={current_process.pid})")
         await update_task_completed(todo_id)
         
     except Exception as e:
-        handle_error("워커실행", e)
+        # 워커 실행/대기 중 예외도 ERROR로 마킹
+        await update_task_error(todo_id)
+        handle_error("워커실행", e, raise_error=False)
 
 def _log_worker_result():
     """워커 종료 결과 로그"""
@@ -161,7 +179,7 @@ async def _watch_cancel_status():
                 terminate_current_worker()
                 break
         except Exception as e:
-            handle_error("취소상태조회", e)
+            handle_error("취소상태조회", e, raise_error=False)
 
 def terminate_current_worker():
     """현재 실행 중인 워커 프로세스 종료"""
@@ -190,6 +208,6 @@ async def start_todolist_polling(interval: int = 7):
                 await process_new_task(row)
                 
         except Exception as e:
-            handle_error("폴링실행", e)
+            handle_error("폴링실행", e, raise_error=False)
             
         await asyncio.sleep(interval)

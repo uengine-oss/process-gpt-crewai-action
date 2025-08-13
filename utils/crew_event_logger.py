@@ -117,8 +117,9 @@ class CrewAIEventLogger:
             result = self._parse_output(getattr(event_obj, 'output', None))
             if isinstance(result, dict) and 'list_of_plans_per_task' in result:
                 md = self._format_plans_md(result['list_of_plans_per_task'])
-                return {'final_result': md}
-            return {'final_result': result}
+                return {'plans': md}
+            return {'result': result}
+
         if etype.startswith('tool_'):
             return {
                 'tool_name': getattr(event_obj, 'tool_name', None),

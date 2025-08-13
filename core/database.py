@@ -6,6 +6,25 @@ from typing import Optional, List, Dict, Any, Tuple
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from utils.logger import handle_error, log
+from typing import Callable, TypeVar, Any as _Any
+import random
+
+T = TypeVar("T")
+
+async def _async_retry(fn: Callable[[], T], *, name: str, retries: int = 3, base_delay: float = 0.8) -> T | None:
+    """간단한 지수 백오프 재시도 (네트워크/HTTP 오류 완화용)"""
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            jitter = random.uniform(0, 0.3)
+            delay = base_delay * (2 ** (attempt - 1)) + jitter
+            handle_error(f"{name} 재시도 {attempt}/{retries}", e, raise_error=False, extra={"delay": round(delay, 2)})
+            await asyncio.sleep(delay)
+    handle_error(f"{name} 최종실패", last_err or Exception("unknown"), raise_error=False)
+    return None
 
 # ============================================================================
 # DB 설정 및 초기화
@@ -30,6 +49,30 @@ def get_db_client() -> Client:
     if _db_client is None:
         raise RuntimeError("DB 클라이언트 비초기화: initialize_db() 먼저 호출하세요")
     return _db_client
+
+# ============================================================================
+# 이벤트 조회 (단건)
+# ============================================================================
+
+def fetch_human_response(job_id: str) -> Optional[Dict[str, Any]]:
+    """events 테이블에서 동일 job_id의 human_response 단일 레코드 조회"""
+    try:
+        supabase = get_db_client()
+        resp = (
+            supabase
+            .table('events')
+            .select('*')
+            .eq('job_id', job_id)
+            .eq('event_type', 'human_response')
+            .execute()
+        )
+        # 0개 행일 때도 안전하게 처리
+        if resp.data and len(resp.data) > 0:
+            return resp.data[0]
+        return None
+    except Exception as e:
+        handle_error("이벤트조회", e)
+        return None
 # ============================================================================
 # 작업 조회 및 상태 관리
 # ============================================================================
@@ -55,30 +98,44 @@ async def fetch_pending_task(limit: int = 1) -> Optional[Dict[str, Any]]:
     try:
         supabase = get_db_client()
         consumer_id = socket.gethostname()
-        resp = supabase.rpc(
-            'crewai_action_fetch_pending_task',
-            {'p_limit': limit, 'p_consumer': consumer_id}
-        ).execute()
+
+        def _call():
+            return (
+                supabase
+                .rpc('crewai_action_fetch_pending_task', {'p_limit': limit, 'p_consumer': consumer_id})
+                .execute()
+            )
+
+        resp = await _async_retry(_call, name="작업조회")
+        if not resp:
+            return None
         rows = resp.data or []
         return rows[0] if rows else None
     except Exception as e:
-        handle_error("작업조회", e)
+        handle_error("작업조회", e, raise_error=False)
+        return None
 
 async def fetch_task_status(todo_id: int) -> Optional[str]:
     """작업 상태 조회"""
     try:
         supabase = get_db_client()
-        resp = (
-            supabase
-            .table('todolist')
-            .select('draft_status')
-            .eq('id', todo_id)
-            .single()
-            .execute()
-        )
+
+        def _call():
+            return (
+                supabase
+                .table('todolist')
+                .select('draft_status')
+                .eq('id', todo_id)
+                .single()
+                .execute()
+            )
+
+        resp = await _async_retry(_call, name="상태조회")
+        if not resp:
+            return None
         return resp.data.get('draft_status') if resp.data else None
     except Exception as e:
-        handle_error("상태조회", e)
+        handle_error("상태조회", e, raise_error=False)
 
 async def update_task_completed(todo_id: str) -> None:
     """작업 완료 상태 업데이트"""
@@ -95,24 +152,39 @@ async def update_task_completed(todo_id: str) -> None:
     except Exception as e:
         handle_error("작업완료업데이트", e)
 
-async def fetch_done_data(proc_inst_id: Optional[str]) -> Tuple[List[Any], List[Any], List[Any]]:
-    """완료된 데이터 조회"""
+async def update_task_error(todo_id: str) -> None:
+    """작업 오류 상태 업데이트 (draft_status → FAILED)"""
+    try:
+        supabase = get_db_client()
+        (
+            supabase
+            .table('todolist')
+            .update({'draft_status': 'FAILED', 'consumer': None})
+            .eq('id', todo_id)
+            .execute()
+        )
+        log(f"작업 오류 상태 업데이트: {todo_id}")
+    except Exception as e:
+        # 오류 상태 업데이트 자체 실패 시에도 폴링이 멈추지 않도록 재던지지 않음
+        handle_error("작업오류업데이트", e, raise_error=False)
+
+async def fetch_done_data(proc_inst_id: Optional[str]) -> List[Any]:
+    """완료된 데이터 조회 (output만)"""
     if not proc_inst_id:
-        return [], [], []
+        return []
     try:
         supabase = get_db_client()
         resp = supabase.rpc(
             'fetch_done_data',
             {'p_proc_inst_id': proc_inst_id}
         ).execute()
-        outputs, feedbacks, drafts = [], [], []
+        outputs = []
         for row in resp.data or []:
             outputs.append(row.get('output'))
-            feedbacks.append(row.get('feedback'))
-            drafts.append(row.get('draft'))
-        return outputs, feedbacks, drafts
+        return outputs
     except Exception as e:
         handle_error("완료데이터조회", e)
+        return []
         
 # ============================================================================
 # 사용자 및 에이전트 정보 조회

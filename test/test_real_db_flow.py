@@ -123,7 +123,7 @@ async def test_full_crew_phase():
     CrewAI 전체 실행 흐름 테스트
     """
     # 실제 존재하는 todo_id 사용 - 테스트 전에 DB에서 확인 필요
-    todo_id = "311407d7-309a-41e1-b512-ddea7b11a879"
+    todo_id = "28f68ce5-9c64-4f32-ad1e-2be81a67b63b"
     client = get_db_client()
     row = (
         client

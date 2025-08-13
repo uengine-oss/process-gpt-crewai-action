@@ -4,6 +4,8 @@ import json
 import asyncio
 import openai
 from utils.logger import handle_error, log
+from typing import Callable
+import random
 
 todo_id_var: ContextVar[Optional[int]] = ContextVar('todo_id', default=None)
 proc_id_var: ContextVar[Optional[str]] = ContextVar('proc_inst_id', default=None)
@@ -12,7 +14,7 @@ proc_id_var: ContextVar[Optional[str]] = ContextVar('proc_inst_id', default=None
 # 요약 처리
 # ============================================================================
 
-async def summarize_async(outputs: Any, feedbacks: Any, drafts: Any = None) -> tuple[str, str]:
+async def summarize_async(outputs: Any, feedbacks: Any, contents: Any = None) -> tuple[str, str]:
     """LLM으로 컨텍스트 요약 - 병렬 처리로 별도 반환 (비동기)"""
     try:
         log("요약을 위한 LLM 병렬 호출 시작")
@@ -20,18 +22,19 @@ async def summarize_async(outputs: Any, feedbacks: Any, drafts: Any = None) -> t
         # 데이터 준비
         outputs_str = _convert_to_string(outputs)
         feedbacks_str = _convert_to_string(feedbacks) if any(item for item in (feedbacks or []) if item and item != {}) else ""
+        contents_str = _convert_to_string(contents) if contents and contents != {} else ""
         
         # 병렬 처리
-        output_summary, feedback_summary = await _summarize_parallel(outputs_str, feedbacks_str)
+        output_summary, feedback_summary = await _summarize_parallel(outputs_str, feedbacks_str, contents_str)
         
         log(f"이전결과 요약 완료: {len(output_summary)}자, 피드백 요약 완료: {len(feedback_summary)}자")
         return output_summary, feedback_summary
         
     except Exception as e:
-        handle_error("요약처리", e)
+        handle_error("요약처리", e, raise_error=False)
         return "", ""
 
-async def _summarize_parallel(outputs_str: str, feedbacks_str: str) -> tuple[str, str]:
+async def _summarize_parallel(outputs_str: str, feedbacks_str: str, contents_str: str = "") -> tuple[str, str]:
     """병렬로 요약 처리 - 별도 반환"""
     tasks = []
     
@@ -42,9 +45,9 @@ async def _summarize_parallel(outputs_str: str, feedbacks_str: str) -> tuple[str
     else:
         tasks.append(_create_empty_task(""))
     
-    # 2. 피드백 요약 태스크 (데이터가 있을 때만)
-    if feedbacks_str and feedbacks_str.strip():
-        feedback_prompt = _create_feedback_summary_prompt(feedbacks_str)
+    # 2. 피드백 요약 태스크 (피드백 또는 현재 결과물이 있을 때만)
+    if (feedbacks_str and feedbacks_str.strip()) or (contents_str and contents_str.strip()):
+        feedback_prompt = _create_feedback_summary_prompt(feedbacks_str, contents_str)
         tasks.append(_call_openai_api_async(feedback_prompt, "피드백"))
     else:
         tasks.append(_create_empty_task(""))
@@ -79,32 +82,46 @@ def _create_output_summary_prompt(outputs_str: str) -> str:
 - 중복된 부분만 정리하고 핵심 내용은 모두 보존
 - 하나의 통합된 문맥으로 작성"""
 
-def _create_feedback_summary_prompt(feedbacks_str: str) -> str:
-    """피드백 정리 프롬프트 - 최신 피드백 최우선, 이전 피드백은 참고용"""
-    return f"""다음은 시간순으로 정렬된 피드백 데이터입니다. **가장 최신 피드백이 최우선**이며, 이전 피드백들은 상황을 이해하기 위한 참고 정보입니다:
+def _create_feedback_summary_prompt(feedbacks_str: str, contents_str: str = "") -> str:
+    """피드백 정리 프롬프트 - 현재 결과물과 피드백을 함께 분석"""
+    
+    # 피드백과 현재 결과물 모두 준비
+    feedback_section = f"""=== 피드백 내용 ===
+{feedbacks_str}""" if feedbacks_str and feedbacks_str.strip() else ""
+    
+    content_section = f"""=== 현재 결과물/작업 내용 ===
+{contents_str}""" if contents_str and contents_str.strip() else ""
+    
+    return f"""다음은 사용자의 피드백과 결과물입니다. 이를 분석하여 통합된 피드백을 작성해주세요:
 
-{feedbacks_str}
+{feedback_section}
 
-처리 방식:
-- **가장 최신(time이 늦은) 피드백을 최우선으로 반영**
-- 이전 피드백들은 상황 맥락을 이해하기 위한 참고 정보로만 활용
+{content_section}
+
+**상황 분석 및 처리 방식:**
+- **현재 결과물을 보고 어떤 점이 문제인지, 개선이 필요한지 판단**
+- 피드백이 있다면 그 의도와 요구사항을 정확히 파악
+- 결과물 자체가 마음에 안들어서 다시 작업을 요청하는 경우일 수 있음
+- 작업 방식이나 접근법이 잘못되었다고 판단하는 경우일 수 있음
+- 부분적으로는 좋지만 특정 부분의 수정이나 보완이 필요한 경우일 수 있음
+- 현재 결과물에 매몰되지 말고, 실제 어떤 부분이 문제인지 파악하여 개선 방안을 제시
+
+**피드백 통합 원칙:**
+- **가장 최신 피드백을 최우선으로 반영**
+- 결과물과 피드백을 종합적으로 분석하여 핵심 문제점 파악
 - **시간 흐름을 파악하여 피드백들 간의 연결고리와 문맥을 이해**
-- 최신 피드백의 요구사항이 이전과 다르면 최신 것을 따라야 함
-- 최신 피드백에서 요구하는 정확한 액션을 명확히 파악
+- 구체적이고 실행 가능한 개선사항 제시
 - **자연스럽고 통합된 하나의 완전한 피드백으로 작성**
 - 최대 2500자까지 허용하여 상세히 작성
 
-**중요한 상황별 처리**:
-- 이전에 저장을 했는데 잘못 저장되었다면 → **수정**이 필요 (다시 저장하면 안됨)
+**중요한 상황별 처리:**
+- 결과물 품질에 대한 불만 → **품질 개선** 요구
+- 작업 방식에 대한 불만 → **접근법 변경** 요구  
+- 이전에 저장을 했는데 잘못 저장되었다면 → **수정**이 필요
 - 이전에 조회만 했는데 저장이 필요하다면 → **저장**이 필요
-- 최신 피드백에서 명시한 요구사항이 절대 우선
+- 부분적 수정이 필요하다면 → **특정 부분 개선** 요구
 
-통합 예시:
-1번 피드백: "정보 저장을 요청했는데 조회만 했다"
-2번 피드백: "정보 저장을 하긴 했으나 잘못 저장되어서 수정을 요청"
-→ 통합 결과: "이전에 저장된 정보가 잘못되었으므로, 올바른 정보로 수정이 필요하다"
-
-출력 형식: 최신 피드백의 요구사항을 중심으로 한 완전한 피드백 문장
+출력 형식: 현재 상황을 종합적으로 분석한 완전한 피드백 문장 (다음 작업자가 즉시 이해하고 실행할 수 있도록)
 """
 
 
@@ -134,30 +151,50 @@ def _get_output_system_prompt() -> str:
 - 중복된 부분만 정리하고 핵심 내용은 모두 보존"""
 
 async def _call_openai_api_async(prompt: str, task_name: str) -> str:
-    """OpenAI API 병렬 호출"""
-    try:
-        # OpenAI 클라이언트를 async로 생성
-        client = openai.AsyncOpenAI()
-        
-        # 작업 유형에 따른 시스템 프롬프트 선택
-        if task_name == "피드백":
-            system_prompt = _get_feedback_system_prompt()
-        else:  # "이전 결과물" 등 다른 모든 경우
-            system_prompt = _get_output_system_prompt()
-        
+    """OpenAI API 병렬 호출 (지수 백오프 재시도, 절대 프로세스 중단 금지)"""
+    # OpenAI 클라이언트를 async로 생성 (한 번 생성해도 안전)
+    client = openai.AsyncOpenAI()
+
+    # 작업 유형에 따른 시스템 프롬프트 선택
+    system_prompt = _get_feedback_system_prompt() if task_name == "피드백" else _get_output_system_prompt()
+
+    # 모델은 chat.completions 호환 모델 사용 (Responses API 미전환 시)
+    model_name = "gpt-4o-mini"
+
+    async def _once() -> str:
         response = await client.chat.completions.create(
-            model="gpt-4.1",
+            model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.1
+            temperature=0.1,
+            timeout=30.0,
         )
-        
-        result = response.choices[0].message.content.strip()
+        return response.choices[0].message.content.strip()
+
+    async def _retry(fn: Callable[[], Any], *, retries: int = 3, base_delay: float = 0.8) -> str:
+        last_error: Exception | None = None
+        for attempt in range(1, retries + 1):
+            try:
+                return await fn()
+            except Exception as e:
+                last_error = e
+                # 5xx / 커넥션 계열은 재시도 가치가 높음 → 동일 정책 일괄 적용
+                jitter = random.uniform(0, 0.3)
+                delay = base_delay * (2 ** (attempt - 1)) + jitter
+                handle_error(
+                    f"{task_name} OpenAI 재시도 {attempt}/{retries}",
+                    e,
+                    raise_error=False,
+                    extra={"delay": round(delay, 2), "model": model_name},
+                )
+                await asyncio.sleep(delay)
+        # 모든 재시도 실패 → 빈 문자열 반환하고 상위는 계속 진행
+        handle_error(f"{task_name} OpenAI 최종실패", last_error or Exception("unknown"), raise_error=False)
+        return ""
+
+    result = await _retry(_once)
+    if result:
         log(f"{task_name} 요약 완료: {len(result)}자")
-        return result
-        
-    except Exception as e:
-        handle_error(f"{task_name} OpenAI API 호출", e)
-        return "요약 생성 실패"
+    return result

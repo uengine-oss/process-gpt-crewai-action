@@ -88,7 +88,7 @@ async def main_async(inputs: dict):
                 "agent_profile": "/images/chat-icon.png"
             },
             job_id=job_id,
-            crew_type="action",
+            crew_type="result",
             todo_id=str(todo_id),
             proc_inst_id=str(proc_inst_id)
         )
@@ -100,9 +100,9 @@ async def main_async(inputs: dict):
         # 결과 저장 완료 이벤트 발행 (save_task_result 직후)
         event_logger.emit_event(
             event_type="task_completed",
-            data={"final_result": pure_form_data},
+            data=pure_form_data,
             job_id=job_id,
-            crew_type="action",
+            crew_type="result",
             todo_id=str(todo_id),
             proc_inst_id=str(proc_inst_id)
         )

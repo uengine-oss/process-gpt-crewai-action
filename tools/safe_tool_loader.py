@@ -7,6 +7,7 @@ from mcp.client.stdio import StdioServerParameters
 from crewai_tools import MCPServerAdapter
 from core.database import fetch_tenant_mcp_config
 from .knowledge_manager import Mem0Tool, MementoTool
+from .human_query_tool import HumanQueryTool
 from utils.logger import log, handle_error
 
 
@@ -22,7 +23,7 @@ class SafeToolLoader:
         self.tenant_id = tenant_id
         self.user_id = user_id
         # 직접 선언한 도구들
-        self.local_tools = ["mem0", "memento"]
+        self.local_tools = ["mem0", "memento", "human_asked"]
         log(f"SafeToolLoader 초기화 완료 (tenant_id: {tenant_id}, user_id: {user_id})")
 
     def warmup_server(self, server_key: str):
@@ -75,9 +76,10 @@ class SafeToolLoader:
         
         tools = []
         
-        # mem0, memento는 항상 기본 로드
+        # 기본 로드 도구들
         tools.extend(self._load_mem0())
         tools.extend(self._load_memento())
+        tools.extend(self._load_human_asked())
         
         # 요청된 도구들 처리
         for name in tool_names:
@@ -102,7 +104,7 @@ class SafeToolLoader:
         try:
             return [Mem0Tool(tenant_id=self.tenant_id, user_id=self.user_id)]
         except Exception as e:
-            handle_error("mem0로드", e)
+            handle_error("mem0로드", e, raise_error=False)
             return []
 
     def _load_memento(self) -> List:
@@ -110,7 +112,15 @@ class SafeToolLoader:
         try:
             return [MementoTool(tenant_id=self.tenant_id)]
         except Exception as e:
-            handle_error("memento로드", e)
+            handle_error("memento로드", e, raise_error=False)
+            return []
+
+    def _load_human_asked(self) -> List:
+        """human_asked 도구 로드"""
+        try:
+            return [HumanQueryTool(tenant_id=self.tenant_id, user_id=self.user_id)]
+        except Exception as e:
+            handle_error("human_asked로드", e, raise_error=False)
             return []
 
     def _load_mcp_tool(self, tool_name: str) -> List:
@@ -150,7 +160,7 @@ class SafeToolLoader:
                 if attempt < max_retries:
                     time.sleep(retry_delay)
                 else:
-                    handle_error(f"{tool_name}MCP로드", e)
+                    handle_error(f"{tool_name}MCP로드", e, raise_error=False)
                     return []
 
     # ============================================================================
@@ -188,7 +198,7 @@ class SafeToolLoader:
                 return {}
                         
         except Exception as e:
-            handle_error(f"{tool_name}DB설정로드", e)
+            handle_error(f"{tool_name}DB설정로드", e, raise_error=False)
             return {}
 
     @classmethod
@@ -198,6 +208,6 @@ class SafeToolLoader:
             try:
                 adapter.stop()
             except Exception as e:
-                handle_error("MCPServerAdapter_stop", e)
+                handle_error("MCPServerAdapter_stop", e, raise_error=False)
         log("모든 MCPServerAdapter 연결 종료 완료")
         cls.adapters.clear()
