@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from typing import Optional, Dict
+from datetime import datetime
 from utils.crew_event_logger import CrewAIEventLogger
 from utils.context_manager import summarize_async
 from utils.logger import log, handle_error
@@ -55,9 +56,9 @@ async def process_new_task(row: Dict):
         await _execute_worker_process(inputs, todo_id)
         
     except Exception as e:
-        # 작업 단위 실패는 ERROR로 마킹하고 폴링은 지속
+        # 작업 단위 실패는 ERROR로 마킹 후 예외 재던지기(폴링 상위에서 삼킴)
         await update_task_error(todo_id)
-        handle_error("작업처리", e, raise_error=False)
+        handle_error("작업준비실패", e, raise_error=True)
         
     finally:
         # 글로벌 상태 초기화
@@ -148,9 +149,9 @@ async def _execute_worker_process(inputs: Dict, todo_id: int):
         await update_task_completed(todo_id)
         
     except Exception as e:
-        # 워커 실행/대기 중 예외도 ERROR로 마킹
+        # 워커 실행/대기 중 예외도 ERROR로 마킹 후 재던지기
         await update_task_error(todo_id)
-        handle_error("워커실행", e, raise_error=False)
+        handle_error("워커실행실패", e, raise_error=True)
 
 def _log_worker_result():
     """워커 종료 결과 로그"""
@@ -179,7 +180,7 @@ async def _watch_cancel_status():
                 terminate_current_worker()
                 break
         except Exception as e:
-            handle_error("취소상태조회", e, raise_error=False)
+            handle_error("취소감시오류", e, raise_error=False)
 
 def terminate_current_worker():
     """현재 실행 중인 워커 프로세스 종료"""
@@ -208,6 +209,6 @@ async def start_todolist_polling(interval: int = 7):
                 await process_new_task(row)
                 
         except Exception as e:
-            handle_error("폴링실행", e, raise_error=False)
+            handle_error("폴링오류", e, raise_error=False)
             
         await asyncio.sleep(interval)

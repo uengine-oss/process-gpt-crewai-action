@@ -104,24 +104,21 @@ class SafeToolLoader:
         try:
             return [Mem0Tool(tenant_id=self.tenant_id, user_id=self.user_id)]
         except Exception as e:
-            handle_error("mem0로드", e, raise_error=False)
-            return []
+            handle_error("툴mem0오류", e, raise_error=True)
 
     def _load_memento(self) -> List:
         """memento 도구 로드"""
         try:
             return [MementoTool(tenant_id=self.tenant_id)]
         except Exception as e:
-            handle_error("memento로드", e, raise_error=False)
-            return []
+            handle_error("툴memento오류", e, raise_error=True)
 
     def _load_human_asked(self) -> List:
         """human_asked 도구 로드"""
         try:
             return [HumanQueryTool(tenant_id=self.tenant_id, user_id=self.user_id)]
         except Exception as e:
-            handle_error("human_asked로드", e, raise_error=False)
-            return []
+            handle_error("툴human오류", e, raise_error=True)
 
     def _load_mcp_tool(self, tool_name: str) -> List:
         """MCP 도구 로드 (timeout & retry 지원)"""
@@ -160,8 +157,7 @@ class SafeToolLoader:
                 if attempt < max_retries:
                     time.sleep(retry_delay)
                 else:
-                    handle_error(f"{tool_name}MCP로드", e, raise_error=False)
-                    return []
+                    handle_error(f"툴{tool_name}오류", e, raise_error=True)
 
     # ============================================================================
     # 헬퍼 메서드들
@@ -198,8 +194,7 @@ class SafeToolLoader:
                 return {}
                         
         except Exception as e:
-            handle_error(f"{tool_name}DB설정로드", e, raise_error=False)
-            return {}
+            handle_error(f"툴설정오류", e, raise_error=True)
 
     @classmethod
     def shutdown_all_adapters(cls):
@@ -208,6 +203,6 @@ class SafeToolLoader:
             try:
                 adapter.stop()
             except Exception as e:
-                handle_error("MCPServerAdapter_stop", e, raise_error=False)
+                handle_error("툴종료오류", e, raise_error=True)
         log("모든 MCPServerAdapter 연결 종료 완료")
         cls.adapters.clear()

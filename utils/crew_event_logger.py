@@ -136,7 +136,7 @@ class CrewAIEventLogger:
             payload = json.loads(json.dumps(record, default=str))
             self.supabase.table('events').insert(payload).execute()
         except Exception as e:
-            handle_error('Supabase저장', e)
+            handle_error('이벤트저장오류', e, raise_error=True)
    
     # =============================================================================
     # Event Handling
@@ -153,7 +153,7 @@ class CrewAIEventLogger:
             self._save_event(rec)
             log(f"[{etype}] [{job_id[:8]}] 저장 완료")
         except Exception as e:
-            handle_error('이벤트처리', e)
+            handle_error('이벤트처리오류', e, raise_error=True)
 
     def emit_event(self, event_type: str, data: Dict[str, Any], job_id: Optional[str] = None,
                    crew_type: Optional[str] = None, todo_id: Optional[str] = None, proc_inst_id: Optional[str] = None) -> None:
@@ -165,7 +165,7 @@ class CrewAIEventLogger:
             self._save_event(rec)
             log(f"[{event_type}] → Supabase 저장 완료")
         except Exception as e:
-            handle_error("커스텀이벤트발행", e)
+            handle_error("이벤트발행오류", e, raise_error=True)
 
 # =============================================================================
 # Config Manager

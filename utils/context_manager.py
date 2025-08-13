@@ -31,8 +31,8 @@ async def summarize_async(outputs: Any, feedbacks: Any, contents: Any = None) ->
         return output_summary, feedback_summary
         
     except Exception as e:
-        handle_error("요약처리", e, raise_error=False)
-        return "", ""
+        # 요약 실패는 작업 자체를 실패로 처리(폴링은 상위에서 계속)
+        handle_error("요약오류", e, raise_error=True)
 
 async def _summarize_parallel(outputs_str: str, feedbacks_str: str, contents_str: str = "") -> tuple[str, str]:
     """병렬로 요약 처리 - 별도 반환"""
@@ -184,17 +184,17 @@ async def _call_openai_api_async(prompt: str, task_name: str) -> str:
                 jitter = random.uniform(0, 0.3)
                 delay = base_delay * (2 ** (attempt - 1)) + jitter
                 handle_error(
-                    f"{task_name} OpenAI 재시도 {attempt}/{retries}",
+                    "요약재시도",
                     e,
                     raise_error=False,
-                    extra={"delay": round(delay, 2), "model": model_name},
+                    extra={"delay": round(delay, 2), "model": model_name, "attempt": attempt, "retries": retries},
                 )
                 await asyncio.sleep(delay)
-        # 모든 재시도 실패 → 빈 문자열 반환하고 상위는 계속 진행
-        handle_error(f"{task_name} OpenAI 최종실패", last_error or Exception("unknown"), raise_error=False)
+        # 모든 재시도 실패 → 예외 재던지기(작업 중단), 폴링은 상위에서 계속
+        handle_error("요약실패", last_error or Exception("unknown"), raise_error=True)
         return ""
 
     result = await _retry(_once)
     if result:
-        log(f"{task_name} 요약 완료: {len(result)}자")
+        log(f"요약완료: {len(result)}자")
     return result

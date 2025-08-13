@@ -71,7 +71,7 @@ def fetch_human_response(job_id: str) -> Optional[Dict[str, Any]]:
             return resp.data[0]
         return None
     except Exception as e:
-        handle_error("이벤트조회", e)
+        handle_error("이벤트조회오류", e)
         return None
 # ============================================================================
 # 작업 조회 및 상태 관리
@@ -91,7 +91,7 @@ async def fetch_todo_by_id(todo_id: int) -> Optional[Dict[str, Any]]:
         )
         return resp.data if resp.data else None
     except Exception as e:
-        handle_error("투두조회", e)
+        handle_error("투두조회오류", e)
 
 async def fetch_pending_task(limit: int = 1) -> Optional[Dict[str, Any]]:
     """대기중인 작업 조회"""
@@ -112,7 +112,7 @@ async def fetch_pending_task(limit: int = 1) -> Optional[Dict[str, Any]]:
         rows = resp.data or []
         return rows[0] if rows else None
     except Exception as e:
-        handle_error("작업조회", e, raise_error=False)
+        handle_error("작업조회오류", e, raise_error=False)
         return None
 
 async def fetch_task_status(todo_id: int) -> Optional[str]:
@@ -135,7 +135,7 @@ async def fetch_task_status(todo_id: int) -> Optional[str]:
             return None
         return resp.data.get('draft_status') if resp.data else None
     except Exception as e:
-        handle_error("상태조회", e, raise_error=False)
+        handle_error("상태조회오류", e, raise_error=False)
 
 async def update_task_completed(todo_id: str) -> None:
     """작업 완료 상태 업데이트"""
@@ -150,10 +150,10 @@ async def update_task_completed(todo_id: str) -> None:
         )
         log(f"작업 완료 상태 업데이트: {todo_id}")
     except Exception as e:
-        handle_error("작업완료업데이트", e)
+        handle_error("완료상태오류", e)
 
 async def update_task_error(todo_id: str) -> None:
-    """작업 오류 상태 업데이트 (draft_status → FAILED)"""
+    """작업 오류 상태 업데이트 (FAILED) - 로그 컬럼은 건드리지 않음"""
     try:
         supabase = get_db_client()
         (
@@ -165,8 +165,7 @@ async def update_task_error(todo_id: str) -> None:
         )
         log(f"작업 오류 상태 업데이트: {todo_id}")
     except Exception as e:
-        # 오류 상태 업데이트 자체 실패 시에도 폴링이 멈추지 않도록 재던지지 않음
-        handle_error("작업오류업데이트", e, raise_error=False)
+        handle_error("오류상태오류", e, raise_error=False)
 
 async def fetch_done_data(proc_inst_id: Optional[str]) -> List[Any]:
     """완료된 데이터 조회 (output만)"""
@@ -183,8 +182,7 @@ async def fetch_done_data(proc_inst_id: Optional[str]) -> List[Any]:
             outputs.append(row.get('output'))
         return outputs
     except Exception as e:
-        handle_error("완료데이터조회", e)
-        return []
+        handle_error("완료데이터오류", e, raise_error=True)
         
 # ============================================================================
 # 사용자 및 에이전트 정보 조회
@@ -214,7 +212,7 @@ async def fetch_participants_info(agent_ids: str) -> tuple[List[Dict], List[Dict
             return user_info_list, agent_info_list
             
         except Exception as e:
-            handle_error("참가자정보조회", e)
+            handle_error("참가자정보오류", e, raise_error=True)
             
     return await asyncio.to_thread(_sync)
 
@@ -290,7 +288,7 @@ async def fetch_form_types(tool_val: str, tenant_id: str) -> tuple[str, list[Dic
             return form_id, form_types
             
         except Exception as e:
-            handle_error("폼타입조회", e)
+            handle_error("폼타입오류", e, raise_error=True)
             
     return await asyncio.to_thread(_sync)
 
@@ -315,7 +313,7 @@ async def fetch_user_agent_info(agent_id: str) -> Optional[Dict[str, Any]]:
                 return resp.data
             return None
         except Exception as e:
-            handle_error("사용자에이전트정보조회", e)
+            handle_error("에이전트정보오류", e)
             
     return await asyncio.to_thread(_sync)
 
@@ -333,7 +331,7 @@ def fetch_tenant_mcp_config(tenant_id: str) -> Optional[Dict[str, Any]]:
         )
         return resp.data.get('mcp') if resp.data else None
     except Exception as e:
-        handle_error("테넌트MCP설정조회", e)
+        handle_error("테넌트설정오류", e)
 
 # ============================================================================
 # 결과 저장
@@ -361,6 +359,6 @@ async def save_task_result(todo_id: int, result: Any) -> None:
             ).execute()
             log(f"결과 저장 완료: todo_id={todo_id}")
         except Exception as e:
-            handle_error("결과저장", e)
+            handle_error("결과저장오류", e)
 
     await asyncio.to_thread(_sync)
