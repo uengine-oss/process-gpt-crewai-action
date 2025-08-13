@@ -138,7 +138,7 @@ class Mem0Tool(BaseTool):
             return self._format_results(hits)
             
         except Exception as e:
-            handle_error("에이전트별지식검색", e)
+            handle_error("에이전트별지식검색", e, raise_error=False)
             return f"에이전트별지식검색 실패: {e}"
 
     def _format_results(self, hits: List[dict]) -> str:
@@ -209,5 +209,5 @@ class MementoTool(BaseTool):
                 results.append(f"📄 파일: {fname} (청크 #{idx})\n내용: {content}\n---")
             return f"테넌트 '{self._tenant_id}'에서 '{query}' 검색 결과:\n\n" + "\n".join(results)
         except Exception as e:
-            handle_error("Memento문서검색", e)
+            handle_error("Memento문서검색", e, raise_error=False)
             return f"검색 중 오류 발생: {e}"
