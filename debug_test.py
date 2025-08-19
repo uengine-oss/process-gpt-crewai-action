@@ -99,8 +99,8 @@ class DebugTester:
             if not form_id:
                 problems.append("form_id 없음")
             
-            form_types = inputs.get('form_types', {})
-            is_default = len(form_types) == 1 and form_types.get('type') == 'default'
+            form_types = inputs.get('form_types', [])
+            is_default = len(form_types) == 1 and isinstance(form_types[0], dict) and form_types[0].get('type') == 'default'
             print(f"  🔸 form_types: {'❌ 기본값' if is_default else f'✅ {len(form_types)}개'} {form_types}")
             if is_default:
                 problems.append("form_types 기본값")

@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import re
 import socket
 from typing import Optional, List, Dict, Any, Tuple
 from dotenv import load_dotenv
@@ -191,13 +192,17 @@ async def fetch_participants_info(agent_ids: str) -> tuple[List[Dict], List[Dict
     """사용자 또는 에이전트 정보 조회"""
     def _sync():
         try:
-            supabase = get_db_client()
             id_list = [id.strip() for id in agent_ids.split(',') if id.strip()]
             
             user_info_list = []
             agent_info_list = []
             
             for agent_id in id_list:
+
+                # UUID가 아니면 사용자/에이전트 모두 스킵
+                if not _is_valid_uuid(agent_id):
+                    continue
+
                 # 이메일로 사용자 조회
                 user_data = _get_user_by_email(agent_id)
                 if user_data:
@@ -250,12 +255,23 @@ def _get_agent_by_id(agent_id: str) -> Optional[Dict[str, Any]]:
         }
     return None
 
+def _is_valid_uuid(value: str) -> bool:
+    """UUID v1~v5 형식인지 검증 (소문자/대문자 허용)"""
+    uuid_regex = re.compile(
+        r'^[0-9a-fA-F]{8}-'
+        r'[0-9a-fA-F]{4}-'
+        r'[1-5][0-9a-fA-F]{3}-'
+        r'[89abAB][0-9a-fA-F]{3}-'
+        r'[0-9a-fA-F]{12}$'
+    )
+    return bool(uuid_regex.match(value))
+
 # ============================================================================
 # 폼 타입 조회
 # ============================================================================
 
 async def fetch_form_types(tool_val: str, tenant_id: str) -> tuple[str, list[Dict[str, Any]]]:
-    """폼 타입 정보 조회"""
+    """폼 타입 정보 조회 및 정규화 - form_id와 form_types 함께 반환"""
     def _sync():
         try:
             supabase = get_db_client()
@@ -269,53 +285,22 @@ async def fetch_form_types(tool_val: str, tenant_id: str) -> tuple[str, list[Dic
                 .eq('tenant_id', tenant_id)
                 .execute()
             )
+            log(f'✅ 폼 타입 조회 완료: {resp}')
             fields_json = resp.data[0].get('fields_json') if resp.data else None
-            
+            log(f'✅ 폼 필드 JSON: {fields_json}')
             if not fields_json:
-                return form_id, [{'id': form_id, 'type': 'default'}]
-            
-            form_types = []
-            for field in fields_json:
-                field_type = field.get('type', '').lower()
-                normalized_type = field_type if field_type in ['report', 'slide'] else 'text'
-                form_types.append({
-                    'id': field.get('key'),
-                    'type': normalized_type,
-                    'key': field.get('key'),
-                    'text': field.get('text', '')
-                })
-            
-            return form_id, form_types
+                return form_id, [{'key': form_id, 'type': 'default', 'text': ''}]
+
+            return form_id, fields_json
             
         except Exception as e:
-            handle_error("폼타입오류", e, raise_error=True)
+            handle_error("폼타입조회", e, raise_error=True)
             
     return await asyncio.to_thread(_sync)
 
 # ============================================================================
 # 테넌트 정보 조회
 # ============================================================================
-
-async def fetch_user_agent_info(agent_id: str) -> Optional[Dict[str, Any]]:
-    """agent 정보 조회"""
-    def _sync():
-        try:
-            supabase = get_db_client()
-            resp = (
-                supabase
-                .table('users')
-                .select('id, username, role, goal, persona, tools, profile, is_agent, model, tenant_id')
-                .eq('id', agent_id)
-                .single()
-                .execute()
-            )
-            if resp.data and resp.data.get('is_agent'):
-                return resp.data
-            return None
-        except Exception as e:
-            handle_error("에이전트정보오류", e)
-            
-    return await asyncio.to_thread(_sync)
 
 def fetch_tenant_mcp_config(tenant_id: str) -> Optional[Dict[str, Any]]:
     """테넌트 MCP 설정 조회"""
