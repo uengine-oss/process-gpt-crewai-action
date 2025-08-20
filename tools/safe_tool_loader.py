@@ -102,6 +102,10 @@ class SafeToolLoader:
     def _load_mem0(self) -> List:
         """mem0 도구 로드 - 에이전트별 메모리"""
         try:
+            # user_id가 없으면 mem0는 개인화 검색이 불가하므로 로드 생략
+            if not self.user_id:
+                log("mem0 도구 로드 생략: user_id 없음")
+                return []
             return [Mem0Tool(tenant_id=self.tenant_id, user_id=self.user_id)]
         except Exception as e:
             handle_error("툴mem0오류", e, raise_error=True)

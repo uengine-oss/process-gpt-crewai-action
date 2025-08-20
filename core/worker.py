@@ -13,7 +13,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
-from utils.context_manager import todo_id_var, proc_id_var
+from utils.context_manager import todo_id_var, proc_id_var, human_users_var
 from utils.crew_utils import convert_crew_output
 from utils.logger import log
 from utils.crew_event_logger import CrewAIEventLogger
@@ -34,6 +34,7 @@ async def main_async(inputs: dict):
     # ContextVar 설정
     todo_id_var.set(inputs.get('todo_id'))
     proc_id_var.set(inputs.get('proc_inst_id'))
+    human_users_var.set(inputs.get('human_users'))
     
     # 크루 생성 및 실행 (동적으로 전달된 inputs 사용)
     agent_info = inputs.get("agent_info")

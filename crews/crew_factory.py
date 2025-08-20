@@ -89,8 +89,8 @@ def create_crew(agent_info=None, task_instructions="", form_types=None, current_
     # 에이전트 생성
     agents = []
     for info in agent_info:
-        # 개별 에이전트의 ID와 테넌트 ID 추출
-        user_id = info.get('id')
+        # 개별 에이전트의 ID와 테넌트 ID 추출 (id/user_id 모두 지원)
+        user_id = info.get('id') or info.get('user_id')
         tenant_id = info.get('tenant_id')
         
         # 각 에이전트의 tools 필드를 콤마로 분리하여 리스트로 변환

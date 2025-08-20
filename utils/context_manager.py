@@ -9,6 +9,7 @@ import random
 
 todo_id_var: ContextVar[Optional[int]] = ContextVar('todo_id', default=None)
 proc_id_var: ContextVar[Optional[str]] = ContextVar('proc_inst_id', default=None)
+human_users_var: ContextVar[Optional[str]] = ContextVar('human_users', default=None)
 
 # ============================================================================
 # 요약 처리

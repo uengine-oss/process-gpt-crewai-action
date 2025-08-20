@@ -110,6 +110,9 @@ class Mem0Tool(BaseTool):
         """지식 검색 및 결과 반환 - 에이전트별 메모리에서"""
         if not query:
             return "검색할 쿼리를 입력해주세요."
+        # user_id가 없으면 mem0에서 개인화 검색을 수행할 수 없음
+        if not self._user_id:
+            return "개인지식 검색 비활성화: user_id 없음"
         
         try:
             # 검색 실행

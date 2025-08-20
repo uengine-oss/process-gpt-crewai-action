@@ -9,6 +9,7 @@ from supabase import create_client, Client
 from utils.logger import handle_error, log
 from typing import Callable, TypeVar, Any as _Any
 import random
+import uuid
 
 T = TypeVar("T")
 
@@ -188,6 +189,72 @@ async def fetch_done_data(proc_inst_id: Optional[str]) -> List[Any]:
 # ============================================================================
 # 사용자 및 에이전트 정보 조회
 # ============================================================================
+
+async def fetch_human_users_by_proc_inst_id(proc_inst_id: str) -> str:
+    """proc_inst_id로 해당 프로세스의 실제 사용자(is_agent=false)들만 조회하여 쉼표로 구분된 문자열로 반환"""
+    if not proc_inst_id:
+        return ""
+    
+    def _sync():
+        try:
+            supabase = get_db_client()
+            
+            # 1. proc_inst_id로 todolist에서 user_id들 조회
+            resp = (
+                supabase
+                .table('todolist')
+                .select('user_id')
+                .eq('proc_inst_id', proc_inst_id)
+                .execute()
+            )
+            
+            if not resp.data:
+                return ""
+            
+            # 2. 모든 user_id를 수집 (중복 제거)
+            all_user_ids = set()
+            for row in resp.data:
+                user_id = row.get('user_id', '')
+                if user_id:
+                    # 쉼표로 구분된 경우 분리
+                    ids = [id.strip() for id in user_id.split(',') if id.strip()]
+                    all_user_ids.update(ids)
+            
+            if not all_user_ids:
+                return ""
+            
+            # 3. 각 user_id가 실제 사용자(is_agent=false 또는 null)인지 확인
+            human_users = []
+            for user_id in all_user_ids:
+                # UUID 형식이 아니면 스킵
+                if not _is_valid_uuid(user_id):
+                    continue
+                
+                # users 테이블에서 해당 user_id 조회
+                user_resp = (
+                    supabase
+                    .table('users')
+                    .select('id, is_agent')
+                    .eq('id', user_id)
+                    .execute()
+                )
+                
+                if user_resp.data:
+                    user = user_resp.data[0]
+                    is_agent = user.get('is_agent')
+                    # is_agent가 false이거나 null인 경우만 실제 사용자로 간주
+                    if not is_agent:  # False 또는 None
+                        human_users.append(user_id)
+            
+            # 4. 쉼표로 구분된 문자열로 반환
+            return ','.join(human_users)
+            
+        except Exception as e:
+            handle_error("사용자조회오류", e, raise_error=False)
+            return ""
+    
+    return await asyncio.to_thread(_sync)
+
 async def fetch_participants_info(agent_ids: str) -> tuple[List[Dict], List[Dict]]:
     """사용자 또는 에이전트 정보 조회"""
     def _sync():
@@ -256,15 +323,12 @@ def _get_agent_by_id(agent_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 def _is_valid_uuid(value: str) -> bool:
-    """UUID v1~v5 형식인지 검증 (소문자/대문자 허용)"""
-    uuid_regex = re.compile(
-        r'^[0-9a-fA-F]{8}-'
-        r'[0-9a-fA-F]{4}-'
-        r'[1-5][0-9a-fA-F]{3}-'
-        r'[89abAB][0-9a-fA-F]{3}-'
-        r'[0-9a-fA-F]{12}$'
-    )
-    return bool(uuid_regex.match(value))
+    """UUID 문자열 형식 검증 (v1~v8 포함)"""
+    try:
+        uuid.UUID(value)
+        return True
+    except Exception:
+        return False
 
 # ============================================================================
 # 폼 타입 조회
@@ -347,3 +411,56 @@ async def save_task_result(todo_id: int, result: Any) -> None:
             handle_error("결과저장오류", e)
 
     await asyncio.to_thread(_sync)
+
+# ============================================================================
+# 알림 저장
+# ============================================================================
+
+def save_notification(
+    *,
+    title: str,
+    notif_type: str,
+    description: Optional[str] = None,
+    user_ids_csv: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    url: Optional[str] = None,
+    from_user_id: Optional[str] = None,
+) -> None:
+    """notifications 테이블에 알림 저장
+
+    - user_ids_csv: 쉼표로 구분된 사용자 ID 목록. 비어있으면 저장 생략
+    - 테이블 스키마는 다음 컬럼을 가정: user_id, tenant_id, title, description, type, url, from_user_id
+    """
+    try:
+        # 대상 사용자가 없으면 작업 생략
+        if not user_ids_csv:
+            log(f"알림 저장 생략: 대상 사용자 없음 (user_ids_csv={user_ids_csv})")
+            return
+
+        supabase = get_db_client()
+
+        user_ids: List[str] = [uid.strip() for uid in user_ids_csv.split(',') if uid and uid.strip()]
+        if not user_ids:
+            log(f"알림 저장 생략: 유효한 사용자 ID 없음 (user_ids_csv={user_ids_csv})")
+            return
+        
+        rows: List[Dict[str, Any]] = []
+        for uid in user_ids:
+            rows.append(
+                {
+                    "id": str(uuid.uuid4()),  # UUID 자동 생성
+                    "user_id": uid,
+                    "tenant_id": tenant_id,
+                    "title": title,
+                    "description": description,
+                    "type": notif_type,
+                    "url": url,
+                    "from_user_id": from_user_id,
+                }
+            )
+
+        supabase.table("notifications").insert(rows).execute()
+        log(f"알림 저장 완료: {len(rows)}건")
+    except Exception as e:
+        # 알림 저장 실패는 치명적이지 않으므로 오류만 로깅
+        handle_error("알림저장오류", e, raise_error=False)

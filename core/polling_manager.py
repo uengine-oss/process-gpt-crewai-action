@@ -15,7 +15,8 @@ from core.database import (
     update_task_error,
     fetch_done_data,
     fetch_participants_info,
-    fetch_form_types
+    fetch_form_types,
+    fetch_human_users_by_proc_inst_id
 )
 
 # ============================================================================
@@ -79,6 +80,9 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     _, agent_list = await fetch_participants_info(agent_ids)
     form_id, form_types = await fetch_form_types(tool_val, tenant_id)
     
+    # 프로세스의 실제 사용자(is_agent=false) 조회
+    human_users = await fetch_human_users_by_proc_inst_id(proc_inst_id)
+    
     # 작업 타입에 따른 요약 처리
     if row.get('task_type') == 'FB_REQUESTED':
         current_feedback = row.get('feedback')
@@ -96,6 +100,7 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
         "form_id": form_id,
         "form_types": form_types,
         "proc_inst_id": proc_inst_id,
+        "human_users": human_users,
         "output_summary": output_summary,
         "feedback_summary": feedback_summary,
     }
