@@ -77,7 +77,7 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     agent_ids = row.get("user_id")  # DB 컬럼명은 user_id이지만 변수명은 agent_ids로 사용
     tool_val = row.get("tool", "")
     tenant_id = str(row.get("tenant_id", ""))
-    _, agent_list = await fetch_participants_info(agent_ids)
+    user_list, agent_list = await fetch_participants_info(agent_ids)
     form_id, form_types = await fetch_form_types(tool_val, tenant_id)
     
     # 프로세스의 실제 사용자(is_agent=false) 조회
@@ -96,6 +96,7 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
         "current_activity_name": current_activity_name,
         "task_instructions": task_instructions,
         "agent_info": agent_list,
+        "user_info": user_list,
         "tenant_id": tenant_id,
         "form_id": form_id,
         "form_types": form_types,

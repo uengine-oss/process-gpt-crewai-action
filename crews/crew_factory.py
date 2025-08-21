@@ -37,7 +37,7 @@ def create_dynamic_agent(agent_info: dict, tools: list) -> AgentWithProfile:
         allow_delegation=True
     )
 
-def create_user_task(task_instructions: str, agent: Agent, form_types: dict = None, current_activity_name: str = "", output_summary: str = "", feedback_summary: str = "", agent_info: list = None) -> Task:
+def create_user_task(task_instructions: str, agent: Agent, form_types: dict = None, current_activity_name: str = "", output_summary: str = "", feedback_summary: str = "", agent_info: list = None, user_info: list = None) -> Task:
     """사용자 요청을 바탕으로 동적 프롬프트 생성하여 단일 Task 생성"""
     
     log("동적 프롬프트 생성 시작...")
@@ -55,7 +55,8 @@ def create_user_task(task_instructions: str, agent: Agent, form_types: dict = No
         form_types=form_types,
         output_summary=output_summary,
         feedback_summary=feedback_summary,
-        current_activity_name=current_activity_name
+        current_activity_name=current_activity_name,
+        user_info=user_info or []
     )
     
     return Task(
@@ -64,7 +65,7 @@ def create_user_task(task_instructions: str, agent: Agent, form_types: dict = No
         agent=agent
     )
 
-def create_crew(agent_info=None, task_instructions="", form_types=None, current_activity_name="", output_summary="", feedback_summary=""):
+def create_crew(agent_info=None, task_instructions="", form_types=None, current_activity_name="", output_summary="", feedback_summary="", user_info=None):
     """동적으로 크루 생성 (첫 번째 에이전트를 매니저로 고정)"""
     global _event_manager
     log(f"동적 크루 생성 시작 - 에이전트: {len(agent_info) if agent_info else 0}개")
@@ -120,7 +121,8 @@ def create_crew(agent_info=None, task_instructions="", form_types=None, current_
         current_activity_name=current_activity_name,
         output_summary=output_summary,
         feedback_summary=feedback_summary,
-        agent_info=agent_info  # 원본 딕셔너리 리스트 전달
+        agent_info=agent_info,  # 원본 딕셔너리 리스트 전달
+        user_info=user_info
     )
     log(f"사용자 태스크 생성 완료: {task_instructions[:50]}...")
     

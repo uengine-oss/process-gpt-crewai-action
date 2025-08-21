@@ -47,7 +47,8 @@ async def main_async(inputs: dict):
         form_types=form_types,
         current_activity_name=current_activity_name,
         output_summary=inputs.get("output_summary", ""),
-        feedback_summary=inputs.get("feedback_summary", "")
+        feedback_summary=inputs.get("feedback_summary", ""),
+        user_info=inputs.get("user_info")
     )
     
     # 크루에 필요한 모든 inputs 전달
@@ -56,7 +57,8 @@ async def main_async(inputs: dict):
         "task_instructions": inputs.get("task_instructions", ""),
         "form_types": inputs.get("form_types", {}),
         "output_summary": inputs.get("output_summary", ""),
-        "feedback_summary": inputs.get("feedback_summary", "")
+        "feedback_summary": inputs.get("feedback_summary", ""),
+        "user_info": inputs.get("user_info")
     }
     
     # 크루 실행

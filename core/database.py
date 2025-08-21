@@ -336,8 +336,12 @@ def _is_valid_uuid(value: str) -> bool:
 # 폼 타입 조회
 # ============================================================================
 
-async def fetch_form_types(tool_val: str, tenant_id: str) -> tuple[str, list[Dict[str, Any]]]:
-    """폼 타입 정보 조회 및 정규화 - form_id와 form_types 함께 반환"""
+async def fetch_form_types(tool_val: str, tenant_id: str) -> tuple[str, Dict[str, Any]]:
+    """폼 타입 정보 조회 및 정규화 - form_id와 form_types 함께 반환
+
+    form_types 반환 형식:
+      { "fields": <fields_json 리스트>, "html": <html 문자열 또는 None> }
+    """
     def _sync():
         try:
             supabase = get_db_client()
@@ -346,18 +350,20 @@ async def fetch_form_types(tool_val: str, tenant_id: str) -> tuple[str, list[Dic
             resp = (
                 supabase
                 .table('form_def')
-                .select('fields_json')
+                .select('fields_json, html')
                 .eq('id', form_id)
                 .eq('tenant_id', tenant_id)
                 .execute()
             )
             log(f'✅ 폼 타입 조회 완료: {resp}')
             fields_json = resp.data[0].get('fields_json') if resp.data else None
+            html = resp.data[0].get('html') if resp.data else None
             log(f'✅ 폼 필드 JSON: {fields_json}')
+            log(f'✅ 폼 HTML: {(html[:120] + "...") if isinstance(html, str) and len(html) > 120 else html}')
             if not fields_json:
-                return form_id, [{'key': form_id, 'type': 'default', 'text': ''}]
+                return form_id, {"fields": [{"key": form_id, "type": "default", "text": ""}], "html": html}
 
-            return form_id, fields_json
+            return form_id, {"fields": fields_json, "html": html}
             
         except Exception as e:
             handle_error("폼타입조회", e, raise_error=True)

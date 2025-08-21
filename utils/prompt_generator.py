@@ -22,7 +22,8 @@ class DynamicPromptGenerator:
         form_types: Dict = None,
         output_summary: str = "",
         feedback_summary: str = "",
-        current_activity_name: str = ""
+        current_activity_name: str = "",
+        user_info: List[Dict] | None = None
     ) -> tuple[str, str]:
         """모든 정보를 조합하여 최적화된 task 프롬프트 생성"""
         
@@ -32,7 +33,8 @@ class DynamicPromptGenerator:
         # 2. 컨텍스트 조합
         context = self._build_context(
             task_instructions, agent_info, form_types,
-            output_summary, feedback_summary, current_activity_name, learned_knowledge
+            output_summary, feedback_summary, current_activity_name, learned_knowledge,
+            user_info or []
         )
         
         # 3. LLM 기반 프롬프트 생성
@@ -73,7 +75,8 @@ class DynamicPromptGenerator:
         output_summary: str,
         feedback_summary: str,
         current_activity_name: str,
-        learned_knowledge: Dict[str, str]
+        learned_knowledge: Dict[str, str],
+        user_info: List[Dict]
     ) -> str:
         """섹션별로 체계화된 명확한 프롬프트 생성"""
         
@@ -81,14 +84,24 @@ class DynamicPromptGenerator:
         has_feedback = feedback_summary and feedback_summary.strip() and feedback_summary.strip() != '없음'
         has_learned_knowledge = any(learned_knowledge.values())
         has_output_summary = output_summary and output_summary.strip() and output_summary.strip() != '없음'
-        # form_types는 리스트 또는 딕셔너리일 수 있음 → 존재 여부만 판단
+        # form_types는 리스트 또는 딕셔너리일 수 있음
         has_form_types = bool(form_types)
+        # 표준 구조 지원: {"fields": [...], "html": "..."}
+        form_fields = None
+        form_html = None
+        if isinstance(form_types, dict) and ("fields" in form_types or "html" in form_types):
+            form_fields = form_types.get("fields")
+            form_html = form_types.get("html")
+        else:
+            form_fields = form_types if form_types else None
         
         # JSON 형식으로 변환
         agent_info_json = json.dumps(agent_info, ensure_ascii=False, indent=2) if agent_info else '정보 없음'
+        user_info_json = json.dumps(user_info, ensure_ascii=False, indent=2) if user_info else '정보 없음'
         learned_knowledge_json = json.dumps(learned_knowledge, ensure_ascii=False, indent=2) if has_learned_knowledge else '관련 경험 없음'
-        # 타입에 관계없이 직렬화 가능 (list/dict 모두 지원)
-        form_types_json = json.dumps(form_types, ensure_ascii=False, indent=2) if has_form_types else '특별한 형식 제약 없음'
+        # 폼 필드/HTML 직렬화 (HTML은 스니펫 없이 전체 전달)
+        form_fields_json = json.dumps(form_fields, ensure_ascii=False, indent=2) if form_fields else '특별한 형식 제약 없음'
+        form_html_text = form_html if isinstance(form_html, str) and form_html.strip() else ''
 
         # 우선순위 텍스트 사전 계산 (내용 동일, f-string 단순화)
         if has_feedback:
@@ -134,6 +147,17 @@ class DynamicPromptGenerator:
 - 역할: 협업할 에이전트들의 역할, ID, 테넌트 정보 제공
 - 활용: 각 에이전트의 전문성을 고려한 작업 분배 및 협업 지시에 사용
 
+**참가자(실사용자) 정보 (user_info):**
+- 값: {user_info_json}
+- 역할: 현재 업무의 실제 담당자/참가자 식별 정보(담당자 표기, 연락/검토 지점 반영)
+- 활용: 결과물에 담당자/참가자 정보가 요구되면 적절히 반영
+
+**담당자(Owner) 규칙:**
+- 담당자 결정: user_info의 사용자들이 현재 작업의 담당자(Owner)로 간주
+- 담당자 식별자 우선순위: id → email → name (사용 가능 항목 사용)
+- user-select-field 처리: 값은 담당자 식별자 사용 (id가 있으면 id, 없으면 email 사용)
+- 텍스트 작성 시: 필요하면 담당자 이름/이메일을 자연스럽게 포함하되 과도한 노출은 피함
+
 **작업 지시사항 (task_instructions):**
 - 값: {task_instructions or '명시되지 않음'}
 - 역할: 기본적으로 수행해야 할 핵심 업무 내용
@@ -160,10 +184,21 @@ class DynamicPromptGenerator:
 - 충돌해결: 피드백 vs 작업지시사항 충돌 시 → 무조건 피드백 우선 적용
 
 **폼 형식 (form_types):**
-- 값: {form_types_json}
-- 역할: 최종 결과물의 구조와 필드 정의
-- 활용: expected_output 구조 설계와 폼_데이터 필드명 결정에 사용
+- 값(필드 정의): {form_fields_json}
+- 값(HTML): {form_html_text if form_html_text else '없음'}
+- 역할: 최종 결과물의 구조와 필드 정의, 선택형 항목(items) 제공
+- 활용: expected_output 구조 설계와 폼_데이터 키/값 결정에 사용
 {f'- 주의: key 값을 변경 없이 정확히 필드명으로 사용해야 함' if has_form_types else ''}
+
+**선택형 필드 처리 규칙:**
+- form_fields의 type이 'radio' 또는 'select'인 경우, 값 목록은 form_types의 HTML에서 추출
+- 예: <radio-field name="review_result" items="[{{'approve':'승인'}},{{'reject':'반려'}}]" ...>
+- 파싱 규칙:
+  1) HTML의 items 속성 문자열을 JSON으로 변환(단일따옴표 → 쌍따옴표) 후 파싱
+  2) 항목 객체의 key가 실제 저장 값, value는 한글 라벨
+  3) 최종 폼_데이터에는 key 값 사용 (예: 'approve' 또는 'reject')
+  4) radio/select 외 필드는 type에 맞는 적절한 텍스트/숫자 형식 사용
+  5) user-select-field는 담당자(Owner)의 식별자 사용 (id 우선, 없으면 email)
 
 === 🎯 섹션 2: 작업 범위 및 방향 ===
 
@@ -303,7 +338,7 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
   ```json
   {
     "상태": "SUCCESS" 또는 "FAILED",
-    "수행한_작업": "실제로 수행한 각 원자 작업을 체크리스트 형태로 상세 기술(작업명, 실행여부, 결과/수치, 근거)",
+    "수행한_작업": "읽기 좋은 자연어 텍스트로 수행 내역을 문단/불릿 형태로 서술",
     "폼_데이터": {
       // 폼타입에 맞는 실제 데이터 (반드시 key 값을 필드명으로 사용)
       form_key : 실제 데이터 값
@@ -313,7 +348,12 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
 - "위 구조는 예시이며, 예시 값들을 그대로 사용하지 말고, 실제 작업 결과로 대체해야 합니다"
 - 폼_데이터 키 규칙: 폼타입의 'key' 값을 변경 없이 원본 그대로 정확히 필드명으로 사용해야 함
 - 폼_데이터에는 요구된 폼타입 필드들이 정확히 포함되어야 함을 명시
+- 수행한_작업 형식: 반드시 '문자열 텍스트'로만 작성. 배열/객체/리스트 금지. 불릿(-) 또는 번호를 사용한 가독성 좋은 서술 권장
 - 수행한_작업에는 작업지시사항에서 추출한 모든 원자 작업이 누락 없이 포함되어야 하며, 누락 시 FAILED로 간주
+
+**선택형(radio/select) 값 결정 지침:**
+- form_types에 HTML이 제공되면 해당 필드의 items를 HTML에서 파싱하여 실제 선택 가능한 값 목록을 결정
+- items 예시: [{"approve":"승인"},{"reject":"반려"}] → 폼_데이터 값은 "approve" 또는 "reject" 중 하나여야 함
 
 **응답 형식**: 오직 다음 JSON만 응답하세요:
 {"description": "Task 형식의 구체적 작업 지시", "expected_output": "결과 형식 안내"}
