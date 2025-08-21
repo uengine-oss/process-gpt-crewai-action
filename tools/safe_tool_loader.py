@@ -19,9 +19,10 @@ class SafeToolLoader:
     """도구 로더 클래스"""
     adapters = []  # MCPServerAdapter 인스턴스 등록
     
-    def __init__(self, tenant_id: str = None, user_id: str = None):
+    def __init__(self, tenant_id: str = None, user_id: str = None, agent_name: str = None):
         self.tenant_id = tenant_id
         self.user_id = user_id
+        self.agent_name = agent_name
         # 직접 선언한 도구들
         self.local_tools = ["mem0", "memento", "human_asked"]
         log(f"SafeToolLoader 초기화 완료 (tenant_id: {tenant_id}, user_id: {user_id})")
@@ -120,7 +121,7 @@ class SafeToolLoader:
     def _load_human_asked(self) -> List:
         """human_asked 도구 로드"""
         try:
-            return [HumanQueryTool(tenant_id=self.tenant_id, user_id=self.user_id)]
+            return [HumanQueryTool(tenant_id=self.tenant_id, user_id=self.user_id, agent_name=self.agent_name)]
         except Exception as e:
             handle_error("툴human오류", e, raise_error=True)
 

@@ -191,7 +191,7 @@ async def fetch_done_data(proc_inst_id: Optional[str]) -> List[Any]:
 # ============================================================================
 
 async def fetch_human_users_by_proc_inst_id(proc_inst_id: str) -> str:
-    """proc_inst_id로 해당 프로세스의 실제 사용자(is_agent=false)들만 조회하여 쉼표로 구분된 문자열로 반환"""
+    """proc_inst_id로 해당 프로세스의 실제 사용자(is_agent=false)들의 이메일만 쉼표로 구분하여 반환"""
     if not proc_inst_id:
         return ""
     
@@ -223,8 +223,8 @@ async def fetch_human_users_by_proc_inst_id(proc_inst_id: str) -> str:
             if not all_user_ids:
                 return ""
             
-            # 3. 각 user_id가 실제 사용자(is_agent=false 또는 null)인지 확인
-            human_users = []
+            # 3. 각 user_id가 실제 사용자(is_agent=false 또는 null)인지 확인 후 이메일 수집
+            human_user_emails = []
             for user_id in all_user_ids:
                 # UUID 형식이 아니면 스킵
                 if not _is_valid_uuid(user_id):
@@ -234,7 +234,7 @@ async def fetch_human_users_by_proc_inst_id(proc_inst_id: str) -> str:
                 user_resp = (
                     supabase
                     .table('users')
-                    .select('id, is_agent')
+                    .select('id, email, is_agent')
                     .eq('id', user_id)
                     .execute()
                 )
@@ -244,10 +244,12 @@ async def fetch_human_users_by_proc_inst_id(proc_inst_id: str) -> str:
                     is_agent = user.get('is_agent')
                     # is_agent가 false이거나 null인 경우만 실제 사용자로 간주
                     if not is_agent:  # False 또는 None
-                        human_users.append(user_id)
+                        email = (user.get('email') or '').strip()
+                        if email:
+                            human_user_emails.append(email)
             
             # 4. 쉼표로 구분된 문자열로 반환
-            return ','.join(human_users)
+            return ','.join(human_user_emails)
             
         except Exception as e:
             handle_error("사용자조회오류", e, raise_error=False)

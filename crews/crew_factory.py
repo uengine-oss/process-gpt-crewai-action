@@ -98,8 +98,9 @@ def create_crew(agent_info=None, task_instructions="", form_types=None, current_
         tool_names = [tool.strip() for tool in tools_str.split(',') if tool.strip()] if tools_str else []
         log(f"에이전트 {info.get('role', 'Unknown')} 툴 목록: {tool_names}")
         
-        # 동적 툴 로딩 (에이전트별)
-        loader = SafeToolLoader(tenant_id=tenant_id, user_id=user_id)
+        # 동적 툴 로딩 (에이전트별) - agent_name 초기화 포함
+        agent_name = info.get('name') or info.get('role') or "Agent"
+        loader = SafeToolLoader(tenant_id=tenant_id, user_id=user_id, agent_name=agent_name)
         tools = loader.create_tools_from_names(tool_names)
         log(f"에이전트 {info.get('role', 'Unknown')} 툴 로드 완료: ({len(tools)}개)")
         

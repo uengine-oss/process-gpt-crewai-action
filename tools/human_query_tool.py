@@ -24,9 +24,6 @@ class HumanQuerySchema(BaseModel):
     options: Optional[List[str]] = Field(
         default=None, description="type이 select일 때 선택지 목록"
     )
-    agent_name: Optional[str] = Field(
-        default=None, description="현재 실행 중인 에이전트 이름(선택)"
-    )
 
 
 class HumanQueryTool(BaseTool):
@@ -44,30 +41,27 @@ class HumanQueryTool(BaseTool):
         "4. 외부 시스템 연동, 파일 생성/이동/삭제 등 시스템 상태를 바꾸는 작업일 때\n"
         "⛔ 위 조건에 해당하면 이 도구 없이 진행 금지\n\n"
         "[2] 응답 타입과 작성 방식 (항상 JSON으로 질의 전송)\n"
-        "- 공통 형식: { role: <누구에게>, text: <질의>, type: <text|select|confirm>, options?: [선택지...], agent_name?: <에이전트명> }\n"
+        "- 공통 형식: { role: <누구에게>, text: <질의>, type: <text|select|confirm>, options?: [선택지...] }\n"
         "- 질의 작성 가이드(반드시 포함): 5W1H, 목적/맥락, 선택 이유 또는 승인 근거, 기본값/제약,\n"
         "  입력/출력 형식과 예시, 반례/실패 시 처리, 보안/권한/감사 로그 요구사항, 마감/우선순위\n\n"
         "// 1) type='text' — 정보 수집(모호/불완전할 때 필수)\n"
         "{\n"
         '  "role": "user",\n'
         '  "text": "어떤 DB 테이블/스키마/키로 저장할까요? 입력값 예시/형식, 실패 시 처리, 보존 기간까지 구체히 알려주세요.",\n'
-        '  "type": "text",\n'
-        '  "agent_name": "어떤 에이전트가?"\n'
+        '  "type": "text"\n'
         "}\n\n"
         "// 2) type='select' — 여러 옵션 중 선택(옵션은 상호배타적, 명확/완전하게 제시)\n"
         "{\n"
         '  "role": "system",\n'
         '  "text": "배포 환경을 선택하세요. 선택 근거(위험/롤백/감사 로그)를 함께 알려주세요.",\n'
         '  "type": "select",\n'
-        '  "options": ["dev", "staging", "prod"],\n'
-        '  "agent_name": "어떤 에이전트가?"\n'
+        '  "options": ["dev", "staging", "prod"]\n'
         "}\n\n"  
         "// 3) type='confirm' — 보안/DB 변경 등 민감 작업 승인(필수)\n"
         "{\n"
         '  "role": "user",\n'
         '  "text": "DB에서 주문 상태를 shipped로 업데이트합니다. 대상: order_id=..., 영향 범위: ...건, 롤백: ..., 진행 승인하시겠습니까?",\n'
-        '  "type": "confirm",\n'
-        '  "agent_name": "ActionAgent"\n'
+        '  "type": "confirm"\n'
         "}\n\n"
         "타입 선택 규칙\n"
         "- text: 모호/누락 정보가 있을 때 먼저 세부사항을 수집 (여러 번 질문 가능)\n"
@@ -97,6 +91,7 @@ class HumanQueryTool(BaseTool):
         user_id: Optional[str] = None,
         todo_id: Optional[int] = None,
         proc_inst_id: Optional[str] = None,
+        agent_name: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -104,12 +99,16 @@ class HumanQueryTool(BaseTool):
         self._user_id = user_id
         self._todo_id = todo_id
         self._proc_inst_id = proc_inst_id
+        self._agent_name = agent_name
 
     # 동기 실행: CrewAI Tool 실행 컨텍스트에서 블로킹 폴링 허용
     def _run(
-        self, role: str, text: str, type: str = "text", options: Optional[List[str]] = None, agent_name: Optional[str] = None
+        self, role: str, text: str, type: str = "text", options: Optional[List[str]] = None
     ) -> str:
         try:
+            # 초기화된 기본 agent_name 사용
+            agent_name = getattr(self, "_agent_name", None)
+                
             log(f"HumanQueryTool 실행: role={role}, agent_name={agent_name}, type={type}, options={options}")
             query_id = f"human_asked_{uuid.uuid4()}"
 
@@ -119,7 +118,6 @@ class HumanQueryTool(BaseTool):
                 "text": text,
                 "type": type,
                 "options": options or [],
-                "agent_name": agent_name,
             }
 
             # 컨텍스트 식별자
@@ -146,18 +144,21 @@ class HumanQueryTool(BaseTool):
             # 알림 저장 (notifications 테이블)
             try:
                 tenant_id = self._tenant_id
-                # 대상 사용자: context var 우선(human_users_var), 없으면 self._user_id(단일)
-                target_user_ids_csv = human_users_var.get() or self._user_id or None
-                log(f"알림 저장 시도: target_user_ids_csv={target_user_ids_csv}, tenant_id={tenant_id}")
-                save_notification(
-                    title=text,
-                    notif_type="chat",
-                    description=agent_name,
-                    user_ids_csv=target_user_ids_csv,
-                    tenant_id=tenant_id,
-                    url=f"/todolist/{todo_id}",
-                    from_user_id=agent_name,
-                )
+                # 대상 이메일: context var(human_users_var)에 이메일 CSV가 있어야만 저장
+                target_emails_csv = human_users_var.get()
+                if target_emails_csv and target_emails_csv.strip():
+                    log(f"알림 저장 시도: target_emails_csv={target_emails_csv}, tenant_id={tenant_id}")
+                    save_notification(
+                        title=text,
+                        notif_type="workitem_bpm",
+                        description=agent_name,
+                        user_ids_csv=target_emails_csv,
+                        tenant_id=tenant_id,
+                        url=f"/todolist/{todo_id}",
+                        from_user_id=agent_name,
+                    )
+                else:
+                    log("알림 저장 생략: 대상 이메일 없음(human_users_var 비어있음)")
             except Exception as e:
                 handle_error("알림저장HumanTool", e, raise_error=False)
 
@@ -170,7 +171,7 @@ class HumanQueryTool(BaseTool):
             return "사용자 미응답 거절"
 
     def _wait_for_response(
-        self, job_id: str, timeout_sec: int = 30, poll_interval_sec: int = 5
+        self, job_id: str, timeout_sec: int = 180, poll_interval_sec: int = 5
     ) -> str:
         """DB events 테이블을 폴링하여 사람의 응답을 기다림"""
         deadline = time.time() + timeout_sec
