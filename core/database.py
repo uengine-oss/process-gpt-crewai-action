@@ -100,13 +100,21 @@ async def fetch_pending_task(limit: int = 1) -> Optional[Dict[str, Any]]:
     try:
         supabase = get_db_client()
         consumer_id = socket.gethostname()
+        env = (os.getenv("ENV") or "").lower()
 
         def _call():
-            return (
-                supabase
-                .rpc('crewai_action_fetch_pending_task', {'p_limit': limit, 'p_consumer': consumer_id})
-                .execute()
-            )
+            if env == "dev":
+                # 개발 환경: 특정 테넌트(uengine)만 폴링
+                return supabase.rpc(
+                    "crewai_action_fetch_pending_task_dev",
+                    {"p_limit": limit, "p_consumer": consumer_id, "p_tenant_id": "uengine"},
+                ).execute()
+            else:
+                # 운영/기타 환경: 기존 로직 유지
+                return supabase.rpc(
+                    "crewai_action_fetch_pending_task",
+                    {"p_limit": limit, "p_consumer": consumer_id},
+                ).execute()
 
         resp = await _async_retry(_call, name="작업조회")
         if not resp:
