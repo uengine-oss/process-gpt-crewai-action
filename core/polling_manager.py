@@ -70,7 +70,7 @@ async def process_new_task(row: Dict):
 async def _prepare_task_inputs(row: Dict) -> Dict:
     """작업 입력 데이터 준비"""
     todo_id = row['id']
-    proc_inst_id = row.get("proc_inst_id")
+    proc_inst_id = row.get('root_proc_inst_id') or row.get('proc_inst_id') 
     current_activity_name = row.get("activity_name", "")
     all_outputs = await fetch_done_data(proc_inst_id)
     task_instructions = row.get("description")
