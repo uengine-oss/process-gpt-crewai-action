@@ -149,7 +149,7 @@ BEGIN
         t.draft_status AS task_type   -- 원본 보관
       FROM todolist AS t
       WHERE t.status = 'IN_PROGRESS'
-        AND t.agent_orch = 'crewai-deep-research'
+        AND t.agent_orch = 'crewai-action'
         AND t.tenant_id = p_tenant_id
         AND (
           (t.agent_mode IN ('DRAFT','COMPLETE') AND t.draft IS NULL AND t.draft_status IS NULL)
