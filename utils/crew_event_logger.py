@@ -7,9 +7,22 @@ from typing import Any, Optional, Dict, List
 from core.database import initialize_db, get_db_client
 from utils.context_manager import todo_id_var, proc_id_var
 from utils.logger import handle_error, log
-from crewai.utilities.events import CrewAIEventsBus
-from crewai.utilities.events.task_events import TaskStartedEvent, TaskCompletedEvent
-from crewai.utilities.events import ToolUsageStartedEvent, ToolUsageFinishedEvent
+
+try:
+    # 최신 버전 (>=0.186.x) 경로
+    from crewai.events import CrewAIEventsBus
+    from crewai.events import (
+        TaskStartedEvent,      # ← 다만 최신 문서 이벤트 이름 확인 필요
+        TaskCompletedEvent,    # 예시이므로 실제 이름과 매핑되는지 확인
+        ToolUsageStartedEvent,
+        ToolUsageFinishedEvent,
+    )
+except ImportError:
+    # 구버전 (예: 0.175 이하) 경로
+    from crewai.utilities.events import CrewAIEventsBus
+    from crewai.utilities.events.task_events import TaskStartedEvent, TaskCompletedEvent
+    from crewai.utilities.events import ToolUsageStartedEvent, ToolUsageFinishedEvent
+
 
 class CrewAIEventLogger:
     """CrewAI 이벤트 로거 - Supabase 전용"""

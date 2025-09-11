@@ -37,7 +37,8 @@ RETURNS TABLE (
   temp_feedback text,
   draft_status public.draft_status,
   -- 가상 컬럼(업데이트 전 값)
-  task_type public.draft_status
+  task_type public.draft_status,
+  root_proc_inst_id text
 ) AS $$
 BEGIN
   RETURN QUERY
@@ -93,7 +94,8 @@ BEGIN
          t.agent_orch,
          t.temp_feedback,
          t.draft_status,              -- 변경 후 값 (STARTED)
-         cte.task_type      -- 변경 전 값
+         cte.task_type,      -- 변경 전 값
+         t.root_proc_inst_id
     )
     SELECT * FROM upd;
 END;
@@ -139,7 +141,8 @@ RETURNS TABLE (
   temp_feedback text,
   draft_status public.draft_status,
   -- 가상 컬럼(업데이트 전 값)
-  task_type public.draft_status
+  task_type public.draft_status,
+  root_proc_inst_id text
 ) AS $$
 BEGIN
   RETURN QUERY
@@ -196,7 +199,8 @@ BEGIN
          t.agent_orch,
          t.temp_feedback,
          t.draft_status,              -- 변경 후 값 (STARTED)
-         cte.task_type                -- 변경 전 값
+         cte.task_type,                -- 변경 전 값
+         t.root_proc_inst_id
     )
     SELECT * FROM upd;
 END;
