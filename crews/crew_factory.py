@@ -1,7 +1,6 @@
 from typing import Optional
 from crewai import Crew, Process, Agent, Task
-from langchain_openai import ChatOpenAI
-from config.config import settings
+from llm_factory import create_llm
 from utils.crew_event_logger import CrewConfigManager
 from tools.safe_tool_loader import SafeToolLoader
 from utils.prompt_generator import DynamicPromptGenerator
@@ -10,32 +9,37 @@ from utils.logger import log
 # 글로벌 이벤트 훅 등록 (한 번만 실행)
 _event_manager = None
 
-# 매니저 LLM 인스턴스 생성
-manager_llm = ChatOpenAI(
-    model="gpt-4.1",
-    temperature=0.1,
-    api_key=settings.openai_api_key
-)
+# 매니저 LLM은 크루 생성 시 매니저 에이전트의 LLM을 사용
 
 class AgentWithProfile(Agent):
     name: Optional[str] = None
 
 def create_dynamic_agent(agent_info: dict, tools: list) -> AgentWithProfile:
     """에이전트 정보를 바탕으로 동적으로 Agent 객체 생성"""
+    model_str = agent_info.get("model") or "gpt-4.1"
+    provider = model_str.split("/", 1)[0] if "/" in model_str else None
+    model_name = model_str.split("/", 1)[1] if "/" in model_str else model_str
+    log(f"에이전트 생성: {agent_info.get('role', 'Unknown')} (모델: {model_str})")
 
-    model = agent_info.get("model", "openai/gpt-4.1")  # 기본값 설정
-    log(f"에이전트 생성: {agent_info.get('role', 'Unknown')} (모델: {model})")
-    
-    return AgentWithProfile(
+    llm_instance = create_llm(
+        provider=provider,
+        model=model_name,
+        temperature=0.1
+    )
+
+    agent = AgentWithProfile(
         role=agent_info.get("role", "범용 AI 어시스턴트"),
         goal=agent_info.get("goal", "사용자 요청을 정확히 수행하는 것"),
         backstory=agent_info.get("backstory", "당신은 전문적이고 효율적인 AI 에이전트입니다. 주어진 작업을 정확하고 신속하게 처리하며, 사용자의 요구사항을 완벽히 이해하고 실행합니다."),
         name=agent_info.get("name", "범용 AI 어시스턴트"),
         tools=tools,
-        llm=model,
+        llm=llm_instance,
         verbose=True,
         allow_delegation=True
     )
+    # 원본 LangChain LLM을 직접 사용하기 위해 보관
+    setattr(agent, "_llm_raw", llm_instance)
+    return agent
 
 def create_user_task(task_instructions: str, agent: Agent, form_types: dict = None, current_activity_name: str = "", output_summary: str = "", feedback_summary: str = "", agent_info: list = None, user_info: list = None) -> Task:
     """사용자 요청을 바탕으로 동적 프롬프트 생성하여 단일 Task 생성"""
@@ -43,7 +47,7 @@ def create_user_task(task_instructions: str, agent: Agent, form_types: dict = No
     log("동적 프롬프트 생성 시작...")
     
     # 동적 프롬프트 생성기 초기화
-    prompt_generator = DynamicPromptGenerator()
+    prompt_generator = DynamicPromptGenerator(llm=agent._llm_raw)
     
     # 원본 agent_info를 그대로 사용 (id만 필요)
     agent_dict_list = agent_info if agent_info else []
@@ -132,7 +136,7 @@ def create_crew(agent_info=None, task_instructions="", form_types=None, current_
         tasks=[task],
         process=Process.sequential,
         planning=True, 
-        manager_llm=manager_llm,
+        manager_llm=manager._llm_raw,
         verbose=True
     )
     

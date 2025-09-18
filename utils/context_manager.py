@@ -2,10 +2,10 @@ from contextvars import ContextVar
 from typing import Optional, Any
 import json
 import asyncio
-import openai
 from utils.logger import handle_error, log
 from typing import Callable
 import random
+from llm_factory import create_llm
 
 todo_id_var: ContextVar[Optional[int]] = ContextVar('todo_id', default=None)
 proc_id_var: ContextVar[Optional[str]] = ContextVar('proc_inst_id', default=None)
@@ -15,7 +15,7 @@ human_users_var: ContextVar[Optional[str]] = ContextVar('human_users', default=N
 # 요약 처리
 # ============================================================================
 
-async def summarize_async(outputs: Any, feedbacks: Any, contents: Any = None) -> tuple[str, str]:
+async def summarize_async(outputs: Any, feedbacks: Any, contents: Any = None, agent_info: Any = None) -> tuple[str, str]:
     """LLM으로 컨텍스트 요약 - 병렬 처리로 별도 반환 (비동기)"""
     try:
         log("요약을 위한 LLM 병렬 호출 시작")
@@ -25,8 +25,20 @@ async def summarize_async(outputs: Any, feedbacks: Any, contents: Any = None) ->
         feedbacks_str = _convert_to_string(feedbacks) if any(item for item in (feedbacks or []) if item and item != {}) else ""
         contents_str = _convert_to_string(contents) if contents and contents != {} else ""
         
+        # 사용할 LLM 결정: 에이전트 정보의 첫 번째 모델을 사용 (없으면 기본값)
+        provider = None
+        model_name = "gpt-4.1"
+        if isinstance(agent_info, list) and agent_info:
+            model_str = agent_info[0].get("model") if isinstance(agent_info[0], dict) else None
+            if model_str:
+                if "/" in model_str:
+                    provider, model_name = model_str.split("/", 1)
+                else:
+                    model_name = model_str
+        llm = create_llm(provider=provider, model=model_name, temperature=0.1)
+        
         # 병렬 처리
-        output_summary, feedback_summary = await _summarize_parallel(outputs_str, feedbacks_str, contents_str)
+        output_summary, feedback_summary = await _summarize_parallel(outputs_str, feedbacks_str, contents_str, llm)
         
         log(f"이전결과 요약 완료: {len(output_summary)}자, 피드백 요약 완료: {len(feedback_summary)}자")
         return output_summary, feedback_summary
@@ -35,21 +47,21 @@ async def summarize_async(outputs: Any, feedbacks: Any, contents: Any = None) ->
         # 요약 실패는 작업 자체를 실패로 처리(폴링은 상위에서 계속)
         handle_error("요약오류", e, raise_error=True)
 
-async def _summarize_parallel(outputs_str: str, feedbacks_str: str, contents_str: str = "") -> tuple[str, str]:
+async def _summarize_parallel(outputs_str: str, feedbacks_str: str, contents_str: str = "", llm: Any = None) -> tuple[str, str]:
     """병렬로 요약 처리 - 별도 반환"""
     tasks = []
     
     # 1. 이전 결과물 요약 태스크 (데이터가 있을 때만)
     if outputs_str and outputs_str.strip():
         output_prompt = _create_output_summary_prompt(outputs_str)
-        tasks.append(_call_openai_api_async(output_prompt, "이전 결과물"))
+        tasks.append(_call_llm_async(llm, output_prompt, "이전 결과물"))
     else:
         tasks.append(_create_empty_task(""))
     
     # 2. 피드백 요약 태스크 (피드백 또는 현재 결과물이 있을 때만)
     if (feedbacks_str and feedbacks_str.strip()) or (contents_str and contents_str.strip()):
         feedback_prompt = _create_feedback_summary_prompt(feedbacks_str, contents_str)
-        tasks.append(_call_openai_api_async(feedback_prompt, "피드백"))
+        tasks.append(_call_llm_async(llm, feedback_prompt, "피드백"))
     else:
         tasks.append(_create_empty_task(""))
     
@@ -151,28 +163,17 @@ def _get_output_system_prompt() -> str:
 - 다음 작업자가 즉시 이해할 수 있도록 명확하게
 - 중복된 부분만 정리하고 핵심 내용은 모두 보존"""
 
-async def _call_openai_api_async(prompt: str, task_name: str) -> str:
-    """OpenAI API 병렬 호출 (지수 백오프 재시도, 절대 프로세스 중단 금지)"""
-    # OpenAI 클라이언트를 async로 생성 (한 번 생성해도 안전)
-    client = openai.AsyncOpenAI()
-
-    # 작업 유형에 따른 시스템 프롬프트 선택
+async def _call_llm_async(llm: Any, prompt: str, task_name: str) -> str:
+    """LangChain LLM 비동기 호출 (지수 백오프 재시도)"""
     system_prompt = _get_feedback_system_prompt() if task_name == "피드백" else _get_output_system_prompt()
 
-    # 모델은 chat.completions 호환 모델 사용 (Responses API 미전환 시)
-    model_name = "gpt-4o-mini"
-
     async def _once() -> str:
-        response = await client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.1,
-            timeout=30.0,
-        )
-        return response.choices[0].message.content.strip()
+        response = await llm.ainvoke([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ])
+        content = getattr(response, "content", None)
+        return (content or str(response)).strip()
 
     async def _retry(fn: Callable[[], Any], *, retries: int = 3, base_delay: float = 0.8) -> str:
         last_error: Exception | None = None
@@ -188,7 +189,7 @@ async def _call_openai_api_async(prompt: str, task_name: str) -> str:
                     "요약재시도",
                     e,
                     raise_error=False,
-                    extra={"delay": round(delay, 2), "model": model_name, "attempt": attempt, "retries": retries},
+                    extra={"delay": round(delay, 2), "attempt": attempt, "retries": retries},
                 )
                 await asyncio.sleep(delay)
         # 모든 재시도 실패 → 예외 재던지기(작업 중단), 폴링은 상위에서 계속

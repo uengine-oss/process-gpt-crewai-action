@@ -1,6 +1,4 @@
 from typing import Dict, List
-from langchain_openai import ChatOpenAI
-from config.config import settings
 from tools.knowledge_manager import Mem0Tool
 from utils.logger import log
 import json
@@ -8,12 +6,8 @@ import json
 class DynamicPromptGenerator:
     """동적 프롬프트 생성 클래스"""
     
-    def __init__(self):
-        self.llm = ChatOpenAI(
-            model="gpt-4.1",
-            temperature=0.1,
-            api_key=settings.openai_api_key
-        )
+    def __init__(self, llm):
+        self.llm = llm
     
     def generate_task_prompt(
         self,

@@ -3,11 +3,14 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.prompt_generator import DynamicPromptGenerator
+from llm_factory import create_llm
 
 def test_prompt_generator():
     """간단한 프롬프트 생성 테스트"""
     
-    generator = DynamicPromptGenerator()
+    # 테스트에서는 고정 LLM 사용 (환경변수 LLM_PROVIDER 기반)
+    test_llm = create_llm(model="gpt-4.1", temperature=0.1)
+    generator = DynamicPromptGenerator(llm=test_llm)
     
     # 테스트 입력값 (여기를 수정해서 테스트)
     test_input = {

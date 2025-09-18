@@ -32,7 +32,7 @@ async def test_prepare_phase():
     """
     준비 단계 실행만 수행하고 핵심 값들을 로그로 출력 (검증/어서션 없음)
     """
-    todo_id = "9d316565-b891-43c6-8e70-cf91f9256bb9"  # 환경에 맞게 변경 가능
+    todo_id = "dc1ef2ff-aa99-4451-81bd-2a0c712c74a5"  # 환경에 맞게 변경 가능
     client = get_db_client()
     resp = (
         client
@@ -85,7 +85,7 @@ async def test_full_crew_phase():
     """
     CrewAI 전체 실행 흐름을 실행하고 주요 단계 로그만 출력 (검증/어서션 없음)
     """
-    todo_id = "9d316565-b891-43c6-8e70-cf91f9256bb9"  # 환경에 맞게 변경 가능
+    todo_id = "dc1ef2ff-aa99-4451-81bd-2a0c712c74a5"  # 환경에 맞게 변경 가능
     client = get_db_client()
     row = (
         client

@@ -87,9 +87,9 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     if row.get('task_type') == 'FB_REQUESTED':
         current_feedback = row.get('feedback')
         current_content = row.get('draft') or row.get('output')
-        output_summary, feedback_summary = await summarize_async(all_outputs, current_feedback, current_content)
+        output_summary, feedback_summary = await summarize_async(all_outputs, current_feedback, current_content, agent_list)
     else:
-        output_summary, feedback_summary = await summarize_async(all_outputs, None, None)
+        output_summary, feedback_summary = await summarize_async(all_outputs, None, None, agent_list)
     
     return {
         "todo_id": todo_id,
