@@ -2,6 +2,8 @@ from typing import Dict, List
 from tools.knowledge_manager import Mem0Tool
 from utils.logger import log
 import json
+import time
+import traceback
 
 class DynamicPromptGenerator:
     """동적 프롬프트 생성 클래스"""
@@ -394,36 +396,67 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
 
 어떤 설명이나 추가 텍스트도 포함하지 마세요. 순수 JSON만 응답하세요."""
         
+        # 프롬프트/컨텍스트 길이 로깅
         try:
-            response = self.llm.invoke([
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": context}
-            ])
-            
-            # 응답 확인을 위한 디버깅 로그
-            response_text = response.content.strip()
-            log(f"LLM 원본 응답: {response_text}")  # 처음 200자만 로그
-            
-            # JSON 파싱
-            if "```json" in response_text:
-                start = response_text.find("```json") + 7
-                end = response_text.find("```", start)
-                json_text = response_text[start:end].strip()
-            else:
-                json_text = response_text
-            
-            data = json.loads(json_text)
-            description = data.get("description", "")
-            expected_output = data.get("expected_output", "")
-            
-            log("동적 프롬프트 생성 완료")
-            return description, expected_output
-            
-        except Exception as e:
-            log(f"프롬프트 생성 실패: {e}")
-            log(f"응답 텍스트: {response_text if 'response_text' in locals() else 'N/A'}")
-            # 기본 프롬프트 반환 (간단한 형태)
-            return (
-                "사용자 요청을 분석하고 팀 에이전트들과 협업하여 처리하세요. 피드백이 있으면 최우선 처리하고, 실제 도구를 사용하여 정확한 결과를 도출하세요.",
-                '{"상태": "SUCCESS/FAILED", "수행한_작업": "구체적 내용", "폼_데이터": {}} JSON 형식으로 결과를 제공하세요.'
-            )
+            log(f"프롬프트 길이 - system: {len(system_prompt)} chars, context: {len(context)} chars")
+        except Exception:
+            pass
+
+        max_attempts = 3
+        base_delay_seconds = 1.0
+        last_error = None
+        response_text = None
+
+        for attempt in range(1, max_attempts + 1):
+            start_time = time.time()
+            try:
+                response = self.llm.invoke([
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": context}
+                ])
+
+                elapsed = time.time() - start_time
+                response_text = getattr(response, "content", str(response)).strip()
+                log(f"[시도 {attempt}/{max_attempts}] LLM 응답 수신 - {elapsed:.2f}s, {len(response_text)} chars")
+
+                # JSON 파싱
+                if "```json" in response_text:
+                    start = response_text.find("```json") + 7
+                    end = response_text.find("```", start)
+                    json_text = response_text[start:end].strip()
+                else:
+                    json_text = response_text
+
+                data = json.loads(json_text)
+                description = data.get("description", "")
+                expected_output = data.get("expected_output", "")
+
+                log("동적 프롬프트 생성 완료")
+                return description, expected_output
+
+            except Exception as e:
+                elapsed = time.time() - start_time
+                last_error = e
+                error_type = type(e).__name__
+                error_message = str(e)
+                stack = traceback.format_exc()
+                snippet = (response_text[:2000] + ("..." if response_text and len(response_text) > 2000 else "")) if response_text else "N/A"
+
+                log(f"[시도 {attempt}/{max_attempts}] 프롬프트 생성 실패 - {elapsed:.2f}s, {error_type}: {error_message}")
+                log(f"[시도 {attempt}/{max_attempts}] 응답 텍스트(최대 2000자): {snippet}")
+                log(f"[시도 {attempt}/{max_attempts}] 스택트레이스:\n{stack}")
+
+                if attempt < max_attempts:
+                    delay = base_delay_seconds * (2 ** (attempt - 1))
+                    try:
+                        log(f"[시도 {attempt}/{max_attempts}] {delay:.1f}s 후 재시도")
+                    except Exception:
+                        pass
+                    time.sleep(delay)
+
+        # 모든 시도 실패 시 기본 프롬프트 반환
+        log(f"모든 재시도 실패: {type(last_error).__name__ if last_error else 'UnknownError'} - {str(last_error) if last_error else ''}")
+        return (
+            "사용자 요청을 분석하고 팀 에이전트들과 협업하여 처리하세요. 피드백이 있으면 최우선 처리하고, 실제 도구를 사용하여 정확한 결과를 도출하세요.",
+            '{"상태": "SUCCESS/FAILED", "수행한_작업": "구체적 내용", "폼_데이터": {}} JSON 형식으로 결과를 제공하세요.'
+        )
