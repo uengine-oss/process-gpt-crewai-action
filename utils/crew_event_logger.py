@@ -7,6 +7,7 @@ from typing import Any, Optional, Dict, List
 from core.database import initialize_db, get_db_client
 from utils.context_manager import todo_id_var, proc_id_var
 from utils.logger import handle_error, log
+from utils.error_explainer import generate_user_error_message
 
 try:
     # 최신 버전 (>=0.186.x) 경로
@@ -128,9 +129,13 @@ class CrewAIEventLogger:
             }
         if etype == 'task_completed':
             result = self._parse_output(getattr(event_obj, 'output', None))
+            # planning 화면 전용 케이스 우선 처리
             if isinstance(result, dict) and 'list_of_plans_per_task' in result:
                 md = self._format_plans_md(result['list_of_plans_per_task'])
                 return {'plans': md}
+            # 일반 작업결과에서는 폼데이터를 제거하여 저장
+            if isinstance(result, dict):
+                result = {k: v for k, v in result.items() if k != '폼_데이터'}
             return {'result': result}
 
         if etype.startswith('tool_'):
@@ -179,6 +184,40 @@ class CrewAIEventLogger:
             log(f"[{event_type}] → Supabase 저장 완료")
         except Exception as e:
             handle_error("이벤트발행오류", e, raise_error=True)
+
+    # =============================================================================
+    # Error Event API
+    # =============================================================================
+    def emit_error(self, *,
+                   stage: str,
+                   error: Exception,
+                   context: Optional[Dict[str, Any]] = None,
+                   job_id: Optional[str] = None,
+                   crew_type: Optional[str] = None,
+                   todo_id: Optional[str] = None,
+                   proc_inst_id: Optional[str] = None) -> None:
+        """에러 이벤트 발행 - 사용자 노출: 단일 텍스트(원인+대처)만 저장"""
+        try:
+            user_friendly = generate_user_error_message(stage=stage, message=str(error), context=context)
+            payload = {
+                "message": user_friendly,
+                "original_message": str(error),
+                "name": "시스템 오류 알림",
+                "goal": "오류 원인과 대처 안내를 전달합니다.",
+                "agent_profile": "/images/chat-icon.png",
+            }
+            jid = job_id or f"error_{uuid.uuid4()}"
+            self.emit_event(
+                event_type="error",
+                data=payload,
+                job_id=jid,
+                crew_type='text',
+                todo_id=todo_id or todo_id_var.get(),
+                proc_inst_id=proc_inst_id or proc_id_var.get(),
+            )
+        except Exception as e:
+            # 에러 로깅 중 에러는 삼키지 않고 표준 로거로만 출력
+            handle_error("이벤트에러발행", e, raise_error=False)
 
 # =============================================================================
 # Config Manager

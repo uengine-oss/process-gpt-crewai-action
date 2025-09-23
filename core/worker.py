@@ -36,20 +36,32 @@ async def main_async(inputs: dict):
     proc_id_var.set(inputs.get('proc_inst_id'))
     human_users_var.set(inputs.get('human_users'))
     
-    # 크루 생성 및 실행 (동적으로 전달된 inputs 사용)
+    # 크루 생성 (create_crew 단계)
     agent_info = inputs.get("agent_info")
     task_instructions = inputs.get("task_instructions")
     form_types = inputs.get("form_types")
     current_activity_name = inputs.get("current_activity_name")
-    crew = create_crew(
-        agent_info=agent_info,
-        task_instructions=task_instructions,
-        form_types=form_types,
-        current_activity_name=current_activity_name,
-        output_summary=inputs.get("output_summary", ""),
-        feedback_summary=inputs.get("feedback_summary", ""),
-        user_info=inputs.get("user_info")
-    )
+    try:
+        crew = create_crew(
+            agent_info=agent_info,
+            task_instructions=task_instructions,
+            form_types=form_types,
+            current_activity_name=current_activity_name,
+            output_summary=inputs.get("output_summary", ""),
+            feedback_summary=inputs.get("feedback_summary", ""),
+            user_info=inputs.get("user_info")
+        )
+    except Exception as e:
+        CrewAIEventLogger().emit_error(
+            stage="create_crew",
+            error=e,
+            context={
+                "activity": current_activity_name or "",
+            },
+            todo_id=str(inputs.get("todo_id") or ""),
+            proc_inst_id=str(inputs.get("proc_inst_id") or "")
+        )
+        raise
     
     # 크루에 필요한 모든 inputs 전달
     crew_inputs = {
@@ -61,9 +73,20 @@ async def main_async(inputs: dict):
         "user_info": inputs.get("user_info")
     }
     
-    # 크루 실행
+    # 크루 실행 (kickoff 단계)
     try:
         result = crew.kickoff(inputs=crew_inputs)
+    except Exception as e:
+        CrewAIEventLogger().emit_error(
+            stage="kickoff",
+            error=e,
+            context={
+                "activity": crew_inputs.get("current_activity_name", ""),
+            },
+            todo_id=str(inputs.get("todo_id") or ""),
+            proc_inst_id=str(inputs.get("proc_inst_id") or "")
+        )
+        raise
     finally:
         from tools.safe_tool_loader import SafeToolLoader
         SafeToolLoader.shutdown_all_adapters()
@@ -72,7 +95,17 @@ async def main_async(inputs: dict):
     form_id = inputs.get("form_id")
     todo_id = inputs.get("todo_id")
     proc_inst_id = inputs.get("proc_inst_id")
-    pure_form_data, wrapped_result = convert_crew_output(result, form_id)
+    try:
+        pure_form_data, wrapped_result = convert_crew_output(result, form_id)
+    except Exception as e:
+        CrewAIEventLogger().emit_error(
+            stage="convert_result",
+            error=e,
+            context={"form_id": form_id},
+            todo_id=str(inputs.get("todo_id") or ""),
+            proc_inst_id=str(inputs.get("proc_inst_id") or "")
+        )
+        raise
     
     if form_id and todo_id:
         event_logger = CrewAIEventLogger()
@@ -97,7 +130,17 @@ async def main_async(inputs: dict):
         )
         
         # 실제 결과 저장
-        await save_task_result(todo_id, wrapped_result)
+        try:
+            await save_task_result(todo_id, wrapped_result)
+        except Exception as e:
+            CrewAIEventLogger().emit_error(
+                stage="save_result",
+                error=e,
+                context={"form_id": form_id},
+                todo_id=str(todo_id),
+                proc_inst_id=str(proc_inst_id)
+            )
+            raise
         log(f"크루 실행 완료 및 결과 저장: {form_id}")
         
         # 결과 저장 완료 이벤트 발행 (save_task_result 직후)

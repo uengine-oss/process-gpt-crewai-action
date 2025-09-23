@@ -49,13 +49,45 @@ async def process_new_task(row: Dict):
     
     try:
         log(f"새 작업 처리 시작: id={todo_id}")
-        
-        # 작업 데이터 준비
-        inputs = await _prepare_task_inputs(row)
-        
-        # 워커 실행
-        await _execute_worker_process(inputs, todo_id)
-        
+
+        # 작업 데이터 준비 (prepare 단계)
+        try:
+            inputs = await _prepare_task_inputs(row)
+        except Exception as e:
+            try:
+                CrewAIEventLogger().emit_error(
+                    stage="prepare",
+                    error=e,
+                    context={
+                        "todo_id": todo_id,
+                        "activity": row.get("activity_name", ""),
+                    },
+                    todo_id=str(todo_id),
+                    proc_inst_id=str(row.get('proc_inst_id') or row.get('root_proc_inst_id') or "")
+                )
+            finally:
+                pass
+            raise
+
+        # 워커 실행 (execute 단계)
+        try:
+            await _execute_worker_process(inputs, todo_id)
+        except Exception as e:
+            try:
+                CrewAIEventLogger().emit_error(
+                    stage="execute_worker",
+                    error=e,
+                    context={
+                        "todo_id": todo_id,
+                        "activity": inputs.get("current_activity_name", "") if isinstance(inputs, dict) else "",
+                    },
+                    todo_id=str(todo_id),
+                    proc_inst_id=str((inputs or {}).get('proc_inst_id') if isinstance(inputs, dict) else "")
+                )
+            finally:
+                pass
+            raise
+
     except Exception as e:
         # 작업 단위 실패는 ERROR로 마킹 후 예외 재던지기(폴링 상위에서 삼킴)
         await update_task_error(todo_id)

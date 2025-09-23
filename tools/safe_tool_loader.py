@@ -146,11 +146,15 @@ class SafeToolLoader:
                 if cmd == "npx":
                     cmd = self._find_npx_command() or cmd
                 
+                # 모든 인자와 환경변수를 문자열로 변환 (pydantic 검증 오류 방지)
+                safe_args = [str(a) for a in server_cfg.get("args", [])]
+                safe_env = {k: str(v) for k, v in (env_vars or {}).items()}
+
                 params = StdioServerParameters(
-                    command=cmd,
-                    args=server_cfg.get("args", []),
-                    env=env_vars,
-                    timeout=timeout
+                    command=str(cmd),
+                    args=safe_args,
+                    env=safe_env,
+                    timeout=int(timeout)
                 )
                 
                 adapter = MCPServerAdapter(params)
