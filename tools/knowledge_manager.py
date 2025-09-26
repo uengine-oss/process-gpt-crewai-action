@@ -193,8 +193,8 @@ class MementoTool(BaseTool):
         try:
             log(f"Memento 문서 검색 시작: tenant_id='{self._tenant_id}', query='{query}'")
             response = requests.post(
-                "http://memento.process-gpt.io/retrieve",
-                # "http://localhost:8005/retrieve",
+                # "http://memento.process-gpt.io/retrieve",
+                "http://localhost:8005/retrieve",
                 json={"query": query, "options": {"tenant_id": self._tenant_id}}
             )
             if response.status_code != 200:
@@ -210,6 +210,7 @@ class MementoTool(BaseTool):
                 idx = doc.get('metadata', {}).get('chunk_index', 'unknown')
                 content = doc.get('page_content', '')
                 results.append(f"📄 파일: {fname} (청크 #{idx})\n내용: {content}\n---")
+                print(f"📄 파일: {fname} (청크 #{idx})\n내용: {content}\n---")
             return f"테넌트 '{self._tenant_id}'에서 '{query}' 검색 결과:\n\n" + "\n".join(results)
         except Exception as e:
             handle_error("문서검색오류", e, raise_error=False)

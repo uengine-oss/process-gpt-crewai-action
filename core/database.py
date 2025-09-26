@@ -106,7 +106,7 @@ async def fetch_pending_task(limit: int = 1) -> Optional[Dict[str, Any]]:
             if env == "dev":
                 # 개발 환경: 특정 테넌트(uengine)만 폴링
                 return supabase.rpc(
-                    "fetch_pending_task",
+                    "crewai_action_fetch_pending_task_dev",
                     {"p_limit": limit, "p_consumer": consumer_id, "p_tenant_id": "uengine"},
                 ).execute()
             else:

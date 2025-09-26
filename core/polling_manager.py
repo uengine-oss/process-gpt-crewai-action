@@ -6,6 +6,7 @@ from typing import Optional, Dict
 from datetime import datetime
 from utils.crew_event_logger import CrewAIEventLogger
 from utils.logger import log, handle_error
+from utils.context_manager import summarize_query_async
 from core.database import (
     initialize_db, 
     fetch_pending_task, 
@@ -102,8 +103,8 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     todo_id = row['id']
     proc_inst_id = row.get('root_proc_inst_id') or row.get('proc_inst_id') 
     current_activity_name = row.get("activity_name", "")
-    task_instructions = row.get("query")
-    log(f"🔍 폴링된 데이터 확인 - query: {repr(task_instructions)}")
+    original_query = row.get("query")
+    log(f"🔍 폴링된 데이터 확인 - 원본 query: {repr(original_query)}")
     agent_ids = row.get("user_id")  # DB 컬럼명은 user_id이지만 변수명은 agent_ids로 사용
     tool_val = row.get("tool", "")
     tenant_id = str(row.get("tenant_id", ""))
@@ -112,6 +113,16 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     
     # 프로세스의 실제 사용자(is_agent=false) 조회
     human_users = await fetch_human_users_by_proc_inst_id(proc_inst_id)
+    
+    # Query 요약 처리
+    task_instructions = original_query
+    if original_query and original_query.strip():
+        try:
+            task_instructions = await summarize_query_async(original_query, agent_list)
+            log(f"📝 Query 요약 완료 - 원본: {len(original_query)}자 → 요약: {len(task_instructions)}자")
+        except Exception as e:
+            log(f"⚠️ Query 요약 실패, 원본 사용: {e}")
+            task_instructions = original_query
     
     # 요약 처리 건너뛰기 - feedback은 원본 그대로 전달
     feedback_summary = row.get('feedback', "")

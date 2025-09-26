@@ -15,6 +15,40 @@ human_users_var: ContextVar[Optional[str]] = ContextVar('human_users', default=N
 # 요약 처리
 # ============================================================================
 
+async def summarize_query_async(query: str, agent_info: Any = None) -> str:
+    """LLM으로 query 요약 - 핵심정보 유지, 짧으면 보강"""
+    try:
+        if not query or not query.strip():
+            return query
+            
+        log("Query 요약을 위한 LLM 호출 시작")
+        
+        # 사용할 LLM 결정: 에이전트 정보의 첫 번째 모델을 사용 (없으면 기본값)
+        provider = None
+        model_name = "gpt-4.1"
+        if isinstance(agent_info, list) and agent_info:
+            model_str = agent_info[0].get("model") if isinstance(agent_info[0], dict) else None
+            if model_str:
+                if "/" in model_str:
+                    provider, model_name = model_str.split("/", 1)
+                else:
+                    model_name = model_str
+        llm = create_llm(provider=provider, model=model_name, temperature=0.1)
+        
+        # Query 요약 프롬프트 생성
+        prompt = _create_query_summary_prompt(query)
+        
+        # LLM 호출
+        result = await _call_llm_async(llm, prompt, "query")
+        
+        log(f"Query 요약 완료: {len(result)}자")
+        return result
+        
+    except Exception as e:
+        # 요약 실패 시 원본 query 반환
+        handle_error("Query요약오류", e, raise_error=False)
+        return query
+
 async def summarize_async(outputs: Any, feedbacks: Any, contents: Any = None, agent_info: Any = None) -> tuple[str, str]:
     """LLM으로 컨텍스트 요약 - 병렬 처리로 별도 반환 (비동기)"""
     try:
@@ -81,6 +115,33 @@ def _convert_to_string(data: Any) -> str:
         return data
     return json.dumps(data, ensure_ascii=False)
 
+def _create_query_summary_prompt(query: str) -> str:
+    """Query 요약 프롬프트 - 핵심정보 유지, 짧으면 보강"""
+    return f"""다음 사용자 요청(query)을 분석하고 적절히 처리해주세요:
+
+{query}
+
+**처리 원칙:**
+1. **내용이 짧거나 불완전한 경우**: 
+   - 원본 내용을 그대로 유지하되, 필요한 맥락이나 세부사항을 보강
+   - 누락된 정보가 있다면 추론하여 추가
+   - 더 명확하고 구체적으로 작성
+
+2. **내용이 긴 경우**:
+   - 핵심 요청사항과 목적을 파악하여 요약
+   - **수치, 목차, 인물명, 물건명, 날짜, 시간, 파일명, URL 등 구체적 정보는 반드시 보존**
+   - 지시사항과 설명은 그대로 유지
+   - 각 섹션별로 내용만 요약하고 구체적인 수치 정보는 유지, 
+   - 중복되거나 불필요한 부분만 정리
+
+3. **공통 원칙**:
+   - 원본 의미와 의도를 절대 변경하지 않음
+   - 사용자의 실제 요구사항을 정확히 파악
+   - 다음 작업자가 즉시 이해하고 실행할 수 있도록 명확하게 작성
+   - 자연스럽고 완전한 문장으로 구성
+
+**출력**: 원본 요청의 핵심을 보존하면서 적절히 처리된 완전한 요청문"""
+
 def _create_output_summary_prompt(outputs_str: str) -> str:
     """이전 결과물 요약 프롬프트"""
     return f"""다음 작업 결과를 정리해주세요:
@@ -138,6 +199,18 @@ def _create_feedback_summary_prompt(feedbacks_str: str, contents_str: str = "") 
 """
 
 
+def _get_query_system_prompt() -> str:
+    """Query 요약용 시스템 프롬프트"""
+    return """당신은 사용자 요청(query) 처리 전문가입니다.
+
+핵심 원칙:
+- **짧은 요청은 보강**: 불완전하거나 모호한 부분을 명확하게 보완
+- **긴 요청은 요약**: 핵심 요구사항만 추출하여 간결하게 정리
+- **구체적 정보 보존**: 수치, 이름, 날짜, 파일명, URL 등은 절대 변경하지 않음
+- **원본 의도 유지**: 사용자의 실제 목적과 요구사항을 정확히 파악
+- **실행 가능성**: 다음 작업자가 즉시 이해하고 실행할 수 있도록 명확하게 작성
+- **자연스러운 문장**: 완전하고 자연스러운 요청문으로 구성"""
+
 def _get_feedback_system_prompt() -> str:
     """피드백 요약용 시스템 프롬프트"""
     return """당신은 피드백 정리 전문가입니다.
@@ -165,7 +238,12 @@ def _get_output_system_prompt() -> str:
 
 async def _call_llm_async(llm: Any, prompt: str, task_name: str) -> str:
     """LangChain LLM 비동기 호출 (지수 백오프 재시도)"""
-    system_prompt = _get_feedback_system_prompt() if task_name == "피드백" else _get_output_system_prompt()
+    if task_name == "query":
+        system_prompt = _get_query_system_prompt()
+    elif task_name == "피드백":
+        system_prompt = _get_feedback_system_prompt()
+    else:
+        system_prompt = _get_output_system_prompt()
 
     async def _once() -> str:
         response = await llm.ainvoke([
