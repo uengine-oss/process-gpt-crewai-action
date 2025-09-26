@@ -5,7 +5,6 @@ import sys
 from typing import Optional, Dict
 from datetime import datetime
 from utils.crew_event_logger import CrewAIEventLogger
-from utils.context_manager import summarize_async
 from utils.logger import log, handle_error
 from core.database import (
     initialize_db, 
@@ -13,7 +12,6 @@ from core.database import (
     fetch_task_status,
     update_task_completed,
     update_task_error,
-    fetch_done_data,
     fetch_participants_info,
     fetch_form_types,
     fetch_human_users_by_proc_inst_id
@@ -104,8 +102,8 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     todo_id = row['id']
     proc_inst_id = row.get('root_proc_inst_id') or row.get('proc_inst_id') 
     current_activity_name = row.get("activity_name", "")
-    all_outputs = await fetch_done_data(proc_inst_id)
-    task_instructions = row.get("description")
+    task_instructions = row.get("query")
+    log(f"🔍 폴링된 데이터 확인 - query: {repr(task_instructions)}")
     agent_ids = row.get("user_id")  # DB 컬럼명은 user_id이지만 변수명은 agent_ids로 사용
     tool_val = row.get("tool", "")
     tenant_id = str(row.get("tenant_id", ""))
@@ -115,13 +113,8 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
     # 프로세스의 실제 사용자(is_agent=false) 조회
     human_users = await fetch_human_users_by_proc_inst_id(proc_inst_id)
     
-    # 작업 타입에 따른 요약 처리
-    if row.get('task_type') == 'FB_REQUESTED':
-        current_feedback = row.get('feedback')
-        current_content = row.get('draft') or row.get('output')
-        output_summary, feedback_summary = await summarize_async(all_outputs, current_feedback, current_content, agent_list)
-    else:
-        output_summary, feedback_summary = await summarize_async(all_outputs, None, None, agent_list)
+    # 요약 처리 건너뛰기 - feedback은 원본 그대로 전달
+    feedback_summary = row.get('feedback', "")
     
     return {
         "todo_id": todo_id,
@@ -134,7 +127,6 @@ async def _prepare_task_inputs(row: Dict) -> Dict:
         "form_types": form_types,
         "proc_inst_id": proc_inst_id,
         "human_users": human_users,
-        "output_summary": output_summary,
         "feedback_summary": feedback_summary,
     }
 

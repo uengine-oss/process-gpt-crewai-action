@@ -38,7 +38,7 @@ async def main_async(inputs: dict):
     
     # 크루 생성 (create_crew 단계)
     agent_info = inputs.get("agent_info")
-    task_instructions = inputs.get("task_instructions")
+    task_instructions = inputs.get("task_instructions") or ""
     form_types = inputs.get("form_types")
     current_activity_name = inputs.get("current_activity_name")
     try:
@@ -47,7 +47,6 @@ async def main_async(inputs: dict):
             task_instructions=task_instructions,
             form_types=form_types,
             current_activity_name=current_activity_name,
-            output_summary=inputs.get("output_summary", ""),
             feedback_summary=inputs.get("feedback_summary", ""),
             user_info=inputs.get("user_info")
         )
@@ -68,7 +67,6 @@ async def main_async(inputs: dict):
         "current_activity_name": inputs.get("current_activity_name", ""),
         "task_instructions": inputs.get("task_instructions", ""),
         "form_types": inputs.get("form_types", {}),
-        "output_summary": inputs.get("output_summary", ""),
         "feedback_summary": inputs.get("feedback_summary", ""),
         "user_info": inputs.get("user_info")
     }

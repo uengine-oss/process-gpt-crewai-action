@@ -16,7 +16,6 @@ class DynamicPromptGenerator:
         task_instructions: str,
         agent_info: List[Dict],
         form_types: Dict = None,
-        output_summary: str = "",
         feedback_summary: str = "",
         current_activity_name: str = "",
         user_info: List[Dict] | None = None
@@ -29,7 +28,7 @@ class DynamicPromptGenerator:
         # 2. 컨텍스트 조합
         context = self._build_context(
             task_instructions, agent_info, form_types,
-            output_summary, feedback_summary, current_activity_name, learned_knowledge,
+            feedback_summary, current_activity_name, learned_knowledge,
             user_info or []
         )
         
@@ -68,7 +67,6 @@ class DynamicPromptGenerator:
         task_instructions: str,
         agent_info: List[Dict],
         form_types: Dict,
-        output_summary: str,
         feedback_summary: str,
         current_activity_name: str,
         learned_knowledge: Dict[str, str],
@@ -79,7 +77,6 @@ class DynamicPromptGenerator:
         # 입력값 존재 여부 확인
         has_feedback = feedback_summary and feedback_summary.strip() and feedback_summary.strip() != '없음'
         has_learned_knowledge = any(learned_knowledge.values())
-        has_output_summary = output_summary and output_summary.strip() and output_summary.strip() != '없음'
         # form_types는 리스트 또는 딕셔너리일 수 있음
         has_form_types = bool(form_types)
         # 표준 구조 지원: {"fields": [...], "html": "..."}
@@ -155,14 +152,9 @@ class DynamicPromptGenerator:
 
 **작업 지시사항 (task_instructions):**
 - 값: {task_instructions or '명시되지 않음'}
-- 역할: 기본적으로 수행해야 할 핵심 업무 내용
+- 역할: 지시사항 및 지침과 이전 결과물들에 대한 정보가 포함되어 있음
 - 활용: Task의 주요 목표와 수행 방법의 기준점 (단, 피드백이 있으면 피드백에 의해 재해석됨)
 
-**이전 작업 결과 (output_summary):**
-- 값: {output_summary or '없음'}
-- 역할: 현재 작업에 필요한 기존 데이터와 컨텍스트 제공, 이건 작업 목표 방향이 아닌, 참고 자료로 사용
-- 활용: 데이터 보완, 연속성 유지, 중복 작업 방지에 핵심적으로 활용
-{f'- 🚨 중요: 이전 결과물에는 현재 작업 수행에 필요한 모든 정보가 담겨있음. 절대 생략 금지' if has_output_summary else ''}
 
 **학습된 경험 (learned_knowledge):**
 - 값: {learned_knowledge_json}

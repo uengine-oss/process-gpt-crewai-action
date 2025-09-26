@@ -79,7 +79,18 @@ class CrewAIEventLogger:
         if not output:
             return ""
         text = getattr(output, 'raw', None) or (output if isinstance(output, str) else "")
-        return self._parse_json_text(text)
+        parsed = self._parse_json_text(text)
+        
+        # 중첩된 JSON 구조 처리: {"result": "{\"list_of_plans_per_task\": [...]}"}
+        if isinstance(parsed, dict) and 'result' in parsed and isinstance(parsed['result'], str):
+            try:
+                nested_result = json.loads(parsed['result'])
+                if isinstance(nested_result, dict) and 'list_of_plans_per_task' in nested_result:
+                    return nested_result
+            except:
+                pass
+        
+        return parsed
 
     def _parse_tool_args(self, args_text: str) -> Optional[str]:
         """tool_args에서 query 키 추출"""
@@ -98,7 +109,7 @@ class CrewAIEventLogger:
         for idx, item in enumerate(plans, 1):
             task = item.get('task', '')
             plan = item.get('plan', '')
-            lines.append(f'## {idx}. {task}')
+            lines.append(f'{task}')
             lines.append('')
             
             # plan이 리스트인 경우와 문자열인 경우를 모두 처리
