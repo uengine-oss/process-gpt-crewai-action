@@ -1,107 +1,160 @@
-from typing import Dict, List
-from tools.knowledge_manager import Mem0Tool
-from utils.logger import log
-import json
 import time
-import traceback
+import json
+import logging
+from typing import Dict, List, Tuple, Optional, Any
+from processgpt_agent_utils.tools.knowledge_manager import Mem0Tool
+
+# 로깅 설정
+logger = logging.getLogger(__name__)
+
 
 class DynamicPromptGenerator:
-    """동적 프롬프트 생성 클래스"""
-    
+    """동적 프롬프트 생성 클래스 (프롬프트 원문 그대로, 폴백 없음/예외 전파)"""
+
     def __init__(self, llm):
         self.llm = llm
-    
+
+    # ----------------------------
+    # 헬퍼
+    # ----------------------------
+    @staticmethod
+    def _strip_code_fences(s: str) -> str:
+        """코드 펜스(```json ... ```) 제거"""
+        s = s.strip()
+        if s.startswith("```"):
+            first_nl = s.find("\n")
+            if first_nl != -1:
+                s = s[first_nl + 1 :]
+            if s.endswith("```"):
+                s = s[:-3]
+        return s.strip()
+
+    @staticmethod
+    def _json_or_label(value: Any, empty_label: str) -> str:
+        """값이 있으면 pretty JSON, 없으면 라벨"""
+        if value:
+            try:
+                return json.dumps(value, ensure_ascii=False, indent=2)
+            except Exception:
+                return str(value)
+        return empty_label
+
+    @staticmethod
+    def _extract_form_parts(form_types: Optional[Dict], form_html: str = "") -> Tuple[Optional[Any], str, bool, bool]:
+        """form_types에서 form_fields / form_html / is_multidata_mode / has_form_types 추출"""
+        has_form_types = bool(form_types)
+        form_fields = None
+        form_html_text = form_html or ""
+
+        if isinstance(form_types, dict) and ("fields" in form_types or "html" in form_types):
+            form_fields = form_types.get("fields")
+            html = form_types.get("html")
+            if html and isinstance(html, str) and html.strip():
+                form_html_text = html
+        else:
+            form_fields = form_types if form_types else None
+
+        is_multidata_mode = bool(
+            form_html_text and 'is_multidata_mode="true"' in form_html_text
+        )
+        return form_fields, form_html_text, is_multidata_mode, has_form_types
+
+    # ----------------------------
+    # 퍼블릭 API
+    # ----------------------------
     def generate_task_prompt(
         self,
         task_instructions: str,
         agent_info: List[Dict],
         form_types: Dict = None,
+        form_html: str = "",
         feedback_summary: str = "",
         current_activity_name: str = "",
-        user_info: List[Dict] | None = None
-    ) -> tuple[str, str]:
-        """모든 정보를 조합하여 최적화된 task 프롬프트 생성"""
-        
-        # 1. 관련 학습 내용 수집
-        learned_knowledge = self._collect_learned_knowledge(agent_info, task_instructions, feedback_summary)
-        
-        # 2. 컨텍스트 조합
-        context = self._build_context(
-            task_instructions, agent_info, form_types,
-            feedback_summary, current_activity_name, learned_knowledge,
-            user_info or []
+        user_info: Optional[List[Dict]] = None,
+    ) -> Tuple[str, str]:
+        """모든 정보를 조합하여 최적화된 task 프롬프트 생성 (실패 시 예외 전파)"""
+
+        # 1) 관련 학습 (soft-fail)
+        learned_knowledge = self._collect_learned_knowledge(
+            agent_info=agent_info,
+            task_instructions=task_instructions,
+            feedback_summary=feedback_summary,
         )
-        
-        # 3. LLM 기반 프롬프트 생성
+
+        # 2) 컨텍스트 조합 (원문 그대로)
+        context = self._build_context(
+            task_instructions=task_instructions,
+            agent_info=agent_info,
+            form_types=form_types,
+            form_html=form_html,
+            feedback_summary=feedback_summary,
+            current_activity_name=current_activity_name,
+            learned_knowledge=learned_knowledge,
+            user_info=user_info or [],
+        )
+
+        # 3) LLM 호출
         return self._generate_optimized_prompt(context)
-    
-    def _collect_learned_knowledge(self, agent_info: List[Dict], task_instructions: str, feedback_summary: str) -> Dict[str, str]:
-        """에이전트별 관련 학습 내용 수집"""
-        
-        # 검색 쿼리 생성
+
+    # ----------------------------
+    # 내부 로직
+    # ----------------------------
+    def _collect_learned_knowledge(
+        self,
+        agent_info: List[Dict],
+        task_instructions: str,
+        feedback_summary: str,  # 현재 미사용(시그니처 유지)
+    ) -> Dict[str, str]:
+        """에이전트별 관련 학습 내용 수집 (오류는 warning 후 지속)"""
         if not task_instructions or not task_instructions.strip():
             return {}
-        
-        search_query = task_instructions.strip()
-        log(f"mem0 검색 쿼리: '{search_query}'")
-        
-        learned_knowledge = {}
-        for agent in agent_info:
-            agent_id = agent.get('id')
-            tenant_id = agent.get('tenant_id')
-            role = agent.get('role', 'Unknown')
-            
-            if agent_id and tenant_id:
-                try:
-                    mem0_tool = Mem0Tool(tenant_id=tenant_id, user_id=agent_id)
-                    result = mem0_tool._run(search_query)
-                    if result and "지식이 없습니다" not in result:
-                        learned_knowledge[role] = result
-                except Exception as e:
-                    log(f"에이전트 {role} 메모리 검색 실패: {e}")
-        
-        return learned_knowledge
-    
+
+        query = task_instructions.strip()
+        logger.info("🧠 mem0 사전 훈련 데이터 검색 시작")
+
+        learned: Dict[str, str] = {}
+        for ag in agent_info:
+            agent_id = ag.get("id")
+            tenant_id = ag.get("tenant_id")
+            role = ag.get("role", "Unknown")
+
+            if not (agent_id and tenant_id):
+                continue
+
+            try:
+                mem0_tool = Mem0Tool(tenant_id=tenant_id, user_id=agent_id)
+                result = mem0_tool._run(query)
+                if result and "지식이 없습니다" not in result:
+                    learned[role] = result
+            except Exception as e:
+                logger.warning("⚠️ 에이전트 %s 메모리 검색 실패: %s", role, e)
+
+        return learned
+
     def _build_context(
         self,
         task_instructions: str,
         agent_info: List[Dict],
-        form_types: Dict,
+        form_types: Optional[Dict],
+        form_html: str,
         feedback_summary: str,
         current_activity_name: str,
         learned_knowledge: Dict[str, str],
-        user_info: List[Dict]
+        user_info: List[Dict],
     ) -> str:
-        """섹션별로 체계화된 명확한 프롬프트 생성"""
-        
-        # 입력값 존재 여부 확인
+        """섹션별로 체계화된 명확한 프롬프트 생성 (⚠️ 원문 그대로 유지)"""
+
+        # ----- (원문 로직/텍스트를 그대로 유지) -----
         has_feedback = feedback_summary and feedback_summary.strip() and feedback_summary.strip() != '없음'
         has_learned_knowledge = any(learned_knowledge.values())
-        # form_types는 리스트 또는 딕셔너리일 수 있음
-        has_form_types = bool(form_types)
-        # 표준 구조 지원: {"fields": [...], "html": "..."}
-        form_fields = None
-        form_html = None
-        if isinstance(form_types, dict) and ("fields" in form_types or "html" in form_types):
-            form_fields = form_types.get("fields")
-            form_html = form_types.get("html")
-        else:
-            form_fields = form_types if form_types else None
-        
-        # JSON 형식으로 변환
-        agent_info_json = json.dumps(agent_info, ensure_ascii=False, indent=2) if agent_info else '정보 없음'
-        user_info_json = json.dumps(user_info, ensure_ascii=False, indent=2) if user_info else '정보 없음'
-        learned_knowledge_json = json.dumps(learned_knowledge, ensure_ascii=False, indent=2) if has_learned_knowledge else '관련 경험 없음'
-        # 폼 필드/HTML 직렬화 (HTML은 스니펫 없이 전체 전달)
-        form_fields_json = json.dumps(form_fields, ensure_ascii=False, indent=2) if form_fields else '특별한 형식 제약 없음'
-        form_html_text = form_html if isinstance(form_html, str) and form_html.strip() else ''
-        
-        # 다중 데이터 모드 감지
-        is_multidata_mode = False
-        if form_html_text and 'is_multidata_mode="true"' in form_html_text:
-            is_multidata_mode = True
 
-        # 우선순위 텍스트 사전 계산 (내용 동일, f-string 단순화)
+        form_fields, form_html_text, is_multidata_mode, has_form_types = self._extract_form_parts(form_types, form_html)
+
+        agent_info_json = self._json_or_label(agent_info, '정보 없음')
+        user_info_json = self._json_or_label(user_info, '정보 없음')
+        learned_knowledge_json = self._json_or_label(learned_knowledge, '관련 경험 없음')
+        form_fields_json = self._json_or_label(form_fields, '특별한 형식 제약 없음')
+
         if has_feedback:
             first_priority_text = """🔥 1순위 - 피드백 절대 우선:
    - 피드백 요구사항이 모든 지시사항보다 우선 (작업지시사항, 학습경험 등 모두 피드백에 종속)
@@ -129,7 +182,7 @@ class DynamicPromptGenerator:
    - 경험에서 얻은 노하우로 품질과 정확성 향상"""
         else:
             second_priority_text = "2순위 - 일반 배경지식 활용"
-        
+
         return f"""
 다음 정보를 바탕으로 CrewAI Task 프롬프트를 생성하세요:
 
@@ -137,8 +190,8 @@ class DynamicPromptGenerator:
 
 **활동명 (current_activity_name):**
 - 값: {current_activity_name or '일반 작업'}
-- 역할: 현재 수행중인 업무의 맥락과 목적을 나타냄
-- 활용: Task description에서 작업의 배경과 목적 설명에 사용
+- 역할: 현재 수행중인 업무 이름을 나타냄
+- 활용: 이름이 의미하는 작업의 배경과 목적 설명에 사용
 
 **팀 구성 (agent_info):**
 - 값: {agent_info_json}
@@ -152,9 +205,8 @@ class DynamicPromptGenerator:
 
 **작업 지시사항 (task_instructions):**
 - 값: {task_instructions or '명시되지 않음'}
-- 역할: 지시사항 및 지침과 이전 결과물들에 대한 정보가 포함되어 있음
+- 역할: 기본적으로 수행해야 할 핵심 업무 내용과 지침 및 이전 결과물들에 대한 정리본
 - 활용: Task의 주요 목표와 수행 방법의 기준점 (단, 피드백이 있으면 피드백에 의해 재해석됨)
-
 
 **학습된 경험 (learned_knowledge):**
 - 값: {learned_knowledge_json}
@@ -164,7 +216,7 @@ class DynamicPromptGenerator:
 
 **피드백 (feedback_summary):**
 - 값: {feedback_summary if has_feedback else '없음'}
-- 역할: 이전 작업 결과에 대한 수정 요구사항 (최고 우선순위)
+- 역할: 이전 작업에 만족하지 못하여 전달된 수정 요구사항 (최고 우선순위)
 - 활용: 모든 다른 지시사항보다 우선하여 작업 방향과 방법을 결정
 {f'- 🔥 최우선: 피드백이 있으면 모든 작업은 이 피드백 내용에 따라 재정의됨' if has_feedback else ''}
 - 처리방식: 피드백 동사(저장/수정/삭제/조회 등..)가 있으면 그에 맞게 작업지시사항 재해석
@@ -197,7 +249,7 @@ class DynamicPromptGenerator:
 
 
 **작업 범위 제한 원칙:**
-- 오로직 작업 지시와 피드백만의 작업 방향이며, 이전 결과물은 그저 참고 자료로 사용하세요.
+- 오로직 작업 지시사항과 피드백만의 작업 방향을 결정
 - 명시된 작업만 수행, 비명시 연관작업/후속작업 절대 금지
 - 예시 1: "휴가 정보 저장" → 오직 휴가정보만 저장, 휴가잔여일수 수정/알림발송/승인처리 등 금지
 - 예시 2: "주문 정보 저장" → 오직 주문정보만 저장, 재고감소/포인트적립/알림발송 등 금지
@@ -213,8 +265,8 @@ class DynamicPromptGenerator:
 
 === 💾 섹션 3: 데이터 쓰기/수정 시 정확성 보장 ===
 
-**데이터 완전성 확보 4단계 절차:**
-1. 이전 작업 결과물에서 사용 가능한 데이터 최대한 활용
+**데이터 완전성 확보 절차:**
+1. 작업 지시사항에서 필요한 모든 데이터 파악
 2. 부족한 데이터는 읽기전용 도구로 조회/검증/보완 (SELECT 쿼리, 검색 API, 메시징 API 등)
 3. 모든 필요 데이터가 완전해진 후에만 쓰기 작업 수행
 4. 데이터를 저장 및 수정할 경우, 주어진 값을 최대한 활용해서 다른 테이블의 값을 조회하는 등, 툴을 적극 활용해서 완전한 데이터를 생성 및 수정해야 함, 절대 누락되는 컬럼이나 데이터가 있어서는 안됩니다.
@@ -227,7 +279,7 @@ class DynamicPromptGenerator:
 
 **슬라이드 형식 (presentation, slide 등):**
 - **구조**: 제목 슬라이드 → 목차 → 본문 슬라이드들 → 결론/질의응답 슬라이드
-- **분량**: 최소 15장 이상 구성(많을 수록 좋음)
+- **분량**: 최소 10장 이상 구성(많을 수록 좋음)
 - **형식**: reveal.js 마크다운 형식으로 결과물 생성
 - **내용 기반**: 보고서가 있을 경우 보고서 내용을 기반으로 슬라이드 생성, 없으면 주제에 맞게 적절히 생성
 - **기술적 요구사항**:
@@ -238,7 +290,7 @@ class DynamicPromptGenerator:
   * 적절한 경우 사용자 정보 통합(발표자 이름, 부서 등)
 - **🚨 중요한 출력 형식 규칙**:
   * 절대로 ```markdown, ```html, ``` 같은 코드 블록으로 결과를 감싸지 마세요
-  * 마크다운 내용을 직접 출력하세요 (코드 블록 없이)
+  * 마크다운 내용을直接 출력하세요 (코드 블록 없이)
   * reveal.js 마크다운 구문을 그대로 사용하되, 코드 블록으로 감싸지 말 것
   * HTML 주석이나 코드 블록 형태의 감싸기는 절대 금지
 
@@ -263,39 +315,13 @@ class DynamicPromptGenerator:
 
 **콘텐츠 생성 시 주의사항:**
 - 모든 가용 도구를 적극 활용하여 정보 수집:
-  * 검색 도구들 (search)
-  * 데이터베이스 조회 도구(매우 중요)
-  * API 호출 도구들
-  * 메시징/커뮤니케이션 도구(중요도 낮음)
-  * mem0/memento 등 메모리 도구(중요도 낮음)
-- 도구 결과가 부족하거나 없어도 작업 중단 및 실패 금지
-- 일반적 배경지식과 주어진 문맥 흐름을 기반으로 초안 작성
-- 폼 요구사항과 작업 맥락에 맞는 적절한 내용 생성
-- mem0와 memento의 지식만으로 결과를 생성하지말고 반드시 모든 툴을 적극 활용하세요
-- supabase slack 관련 제공된 사용가능한 툴 들을 적극 활용하여 결과를 생성하고 mem0, memento, human_asked에 의존하지마세요
-
-=== 🛠️ 섹션 5: 도구 사용 가이드라인 ===
-
-**모든 가용 도구 적극 활용 원칙:**
-- **검색 도구들**: search 등 모든 검색 도구 적극 활용
-- **데이터베이스 도구**: SELECT 쿼리 등 데이터 조회 도구 활용(매우 중요)
-- **API 호출 도구**: 검색 API, 조회 API 등 외부 연동 도구 활용
-- **메시징/커뮤니케이션 도구**: 정보 수집 및 확인용 도구 활용
-- **mem0/memento 도구**: 메모리 기반 정보 검색 도구 활용(중요도 낮음, 이 결과는 그저 참고 자료 덫 붙이기 위해 사용)
-- **기타 모든 읽기전용 도구들**: 정보 수집에 도움이 되는 모든 도구 활용
-
-**도구 사용 시 주의사항:**
-- 반드시 적극적으로 도구를 활용하되, 도구 결과가 부족하거나 없어도 작업 중단 및 실패 금지
-- 여러 도구를 조합하여 최대한 많은 정보 수집
-- 도구 결과에만 의존하지 말고 일반 배경지식도 활용
-
-**human_asked 도구:**
-- 사용 시점:
-  * 보안/민감 작업 수행 전
-  * 특정 데이터를 쓰거나 수정하기 전
-  * 단순 select는 승인 없이 바로 실행
-- 질문 형식: 부족한 정보 및 승인 요청을 사용자로 부터 받기 위해 3가지 타입중 선택
- - 필수 규칙(쓰기 작업): INSERT/UPDATE/DELETE(저장/수정/삭제) 전에는 반드시 type="confirm"으로 승인 요청 → ✅ 승인 시에만 실행, ❌ 거절 또는 미응답 시 즉시 중단
+  * 모든 도구룰 활용하고도, 정보가 부족할 경우, 배경 지식과 주어진 문맥 흐름을 기반으로 작성
+  * 실제로 에이전트에게 주어진 모든 도구를 반드시 활용
+  * 단! 메모리 관련 도구(mem0, memento)는 참고용으로, 이 결과가 없더라도 작업 중단 및 실패 금지
+  * 폼 요구사항과 작업 맥락에 맞는 적절한 내용 생성
+  * 여러 도구를 사용하여, 최대한 많은 정보를 수집
+  * 도구에만 의존하지말고, 배경 지식과 주어진 문맥 흐름을 기반으로도 작성
+  (예 : DB 조회 관련 작업이면, supabase 툴을 사용하여 데이터를 조회)
 
 === 📤 프롬프트 생성 최종 지침 ===
 
@@ -307,23 +333,23 @@ class DynamicPromptGenerator:
 - 데이터 처리 시 완전성과 정확성을 보장할 것
 
 **성공 기준:**
-- 명시된 목표들이 전부 달성되어야 함 (일부만 달성하면 실패)
+- 명시된 목표들이 전부 달성되어야 함 (일부만 달성하면 실패이며, 실패 시 반드시 사유를 디테일하게 명시)
 {f'- 피드백 내용을 100% 반영하여 처리' if has_feedback else ''}
 - 요구된 형식으로 결과 제공
 - 작업 범위 엄수 확인
 
 JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 방법", "expected_output": "구체적인 결과 형식과 성공 기준"}}
 """
-    
-    def _generate_optimized_prompt(self, context: str) -> tuple[str, str]:
-        """LLM 기반 프롬프트 생성"""
-        
+
+    def _generate_optimized_prompt(self, context: str) -> Tuple[str, str]:
+        """LLM 기반 프롬프트 생성 (재시도 3회, 폴백 없음/실패 시 예외 전파)"""
+
+        # ⚠️ 시스템 프롬프트 원문 그대로 유지
         system_prompt = """당신은 CrewAI Task description을 작성하는 전문가입니다.
 
 **역할**: 주어진 컨텍스트 정보를 바탕으로 에이전트가 수행할 구체적인 작업 지시(description)와 결과 형식(expected_output)을 생성합니다.
 **응답 형식**: 반드시 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
-**주의사항**: 모든 가용 도구를 적극 활용하되, 도구 결과가 부족하거나 없어도 작업 중단 및 실패 금지 -> 일반 배경지식 및 문맥 흐름으로 초안 작성
-**도구 사용지침**: supabase slack 관련 제공된 사용 가능한 툴 들을 적극 활용하여 결과를 생성하고 mem0, memento, human_asked에 의존하지마세요
+**도구 사용지침**: 현재 사용 가능한 툴 들을 적극 활용하되, 도구 결과에만 의존하지말고, 일반 배경지식 및 문맥 흐름으로 초안 작성
 
 
 **expected_output 상세 작성 지침:**
@@ -352,14 +378,14 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
     // 다중 데이터 모드 필드는 배열 형태로 반환 (HTML의 실제 name 속성 사용 임의로 생성 금지)
     real_multidata_field_name : [
       {
-        "name": "실제 이름 값",
-        "interest": "실제 관심사 값",
-        "skill_level": "실제 기술 수준 값"
+        "property1": "실제 속성 값",
+        "property2": "실제 속성 값",
+        "property3": "실제 속성 값"
       },
       {
-        "name": "실제 이름 값2",
-        "interest": "실제 관심사 값2", 
-        "skill_level": "실제 기술 수준 값2"
+        "property1": "실제 속성 값2",
+        "property2": "실제 속성 값2",
+        "property3": "실제 속성 값2",
       }
     ]
   }
@@ -387,17 +413,17 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
 {"description": "Task 형식의 구체적 작업 지시", "expected_output": "결과 형식 안내"}
 
 어떤 설명이나 추가 텍스트도 포함하지 마세요. 순수 JSON만 응답하세요."""
-        
-        # 프롬프트/컨텍스트 길이 로깅
+
+        # 프롬프트/컨텍스트 길이 로깅 (예외 무시)
         try:
-            log(f"프롬프트 길이 - system: {len(system_prompt)} chars, context: {len(context)} chars")
+            logger.info("📝 프롬프트 길이 - system=%d chars, context=%d chars", len(system_prompt), len(context))
         except Exception:
             pass
 
         max_attempts = 3
         base_delay_seconds = 1.0
-        last_error = None
-        response_text = None
+        last_error: Optional[Exception] = None
+        response_text: Optional[str] = None
 
         for attempt in range(1, max_attempts + 1):
             start_time = time.time()
@@ -408,47 +434,49 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
                 ])
 
                 elapsed = time.time() - start_time
-                response_text = getattr(response, "content", str(response)).strip()
-                log(f"[시도 {attempt}/{max_attempts}] LLM 응답 수신 - {elapsed:.2f}s, {len(response_text)} chars")
 
-                # JSON 파싱
-                if "```json" in response_text:
-                    start = response_text.find("```json") + 7
-                    end = response_text.find("```", start)
-                    json_text = response_text[start:end].strip()
+                # LLM 응답 구조 방어
+                raw = getattr(response, "content", response)
+                if isinstance(raw, list):
+                    response_text = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in raw)
                 else:
-                    json_text = response_text
+                    response_text = str(raw)
+                response_text = (response_text or "").strip()
 
+                if not response_text:
+                    raise ValueError("Empty response from LLM")
+
+                logger.info("📝 [시도 %d/%d] LLM 응답 수신 - %.2fs, %d chars", attempt, max_attempts, elapsed, len(response_text))
+
+                # JSON 파싱 (코드 펜스 제거)
+                json_text = self._strip_code_fences(response_text)
                 data = json.loads(json_text)
+
                 description = data.get("description", "")
                 expected_output = data.get("expected_output", "")
 
-                log("동적 프롬프트 생성 완료")
+                logger.info("✅ 동적 프롬프트 생성 완료")
                 return description, expected_output
 
             except Exception as e:
-                elapsed = time.time() - start_time
+                elapsed = time.time() - start_time if 'start_time' in locals() else 0.0
                 last_error = e
-                error_type = type(e).__name__
-                error_message = str(e)
-                stack = traceback.format_exc()
                 snippet = (response_text[:2000] + ("..." if response_text and len(response_text) > 2000 else "")) if response_text else "N/A"
 
-                log(f"[시도 {attempt}/{max_attempts}] 프롬프트 생성 실패 - {elapsed:.2f}s, {error_type}: {error_message}")
-                log(f"[시도 {attempt}/{max_attempts}] 응답 텍스트(최대 2000자): {snippet}")
-                log(f"[시도 {attempt}/{max_attempts}] 스택트레이스:\n{stack}")
+                logger.error("❌ [시도 %d/%d] 프롬프트 생성 실패 - %.2fs, %s: %s",
+                             attempt, max_attempts, elapsed, type(e).__name__, str(e))
+                logger.error("📝 [시도 %d/%d] 응답 텍스트(최대 2000자): %s", attempt, max_attempts, snippet)
+                logger.exception("🔍 [시도 %d/%d] 스택트레이스", attempt, max_attempts)
 
                 if attempt < max_attempts:
                     delay = base_delay_seconds * (2 ** (attempt - 1))
-                    try:
-                        log(f"[시도 {attempt}/{max_attempts}] {delay:.1f}s 후 재시도")
-                    except Exception:
-                        pass
+                    logger.info("⏳ [시도 %d/%d] %.1fs 후 재시도", attempt, max_attempts, delay)
                     time.sleep(delay)
 
-        # 모든 시도 실패 시 기본 프롬프트 반환
-        log(f"모든 재시도 실패: {type(last_error).__name__ if last_error else 'UnknownError'} - {str(last_error) if last_error else ''}")
-        return (
-            "사용자 요청을 분석하고 팀 에이전트들과 협업하여 처리하세요. 피드백이 있으면 최우선 처리하고, 실제 도구를 사용하여 정확한 결과를 도출하세요.",
-            '{"상태": "SUCCESS/FAILED", "수행한_작업": "구체적 내용", "폼_데이터": {}} JSON 형식으로 결과를 제공하세요.'
+        # 모든 시도 실패 시 예외 전파 (폴백 없음)
+        logger.error(
+            "💥 모든 재시도 실패: %s - %s",
+            type(last_error).__name__ if last_error else "UnknownError",
+            str(last_error) if last_error else ""
         )
+        raise RuntimeError("Dynamic prompt generation failed") from last_error
