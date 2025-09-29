@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-CrewAI Action Server
-- process-gpt-agent-sdk를 사용한 폴링 기반 서버
-- 간단하고 명확한 구조로 설계
-"""
-
 import asyncio
 import logging
 from processgpt_agent_sdk.processgpt_agent_framework import ProcessGPTAgentServer

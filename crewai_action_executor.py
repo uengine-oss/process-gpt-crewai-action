@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-CrewAI Action Executor
-- context에서 데이터를 추출하여 CrewAI 실행
-- 간단하고 명확한 실행 로직
-"""
-
 import json
 import logging
 import uuid
