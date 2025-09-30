@@ -32,7 +32,7 @@ class CrewAIActionExecutor(AgentExecutor):
             extras = context_data.get("extras", {})
             proc_inst_id = row.get("root_proc_inst_id") or row.get("proc_inst_id")
             task_id = row.get("id")
-            form_id = row.get("form_id")
+            form_id = extras.get("form_id")
             
             logger.info(f"🔍 form_id: {form_id}, task_id: {task_id}, proc_inst_id: {proc_inst_id}")
             
