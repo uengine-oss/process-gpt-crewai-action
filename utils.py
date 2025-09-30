@@ -9,6 +9,9 @@ _RE_CODE_BLOCK = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
 
 def _parse_json_guard(text: str) -> Any:
     """문자열을 JSON으로 파싱."""
+    # 백틱을 쌍따옴표로 치환 (잘못된 JSON 형식 수정)
+    text = text.replace('`', '"')
+    
     try:
         return json.loads(text)
     except Exception:
@@ -55,9 +58,12 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
         # 4) 폼_데이터 추출/정규화
         form_raw = output_val.get("폼_데이터") if isinstance(output_val, dict) else None
         pure_form_data = _to_form_dict(form_raw)
+        logger.info(f"🔍 pure_form_data: {pure_form_data}")
 
         # 5) form_id 래핑 (요청사항: form_id로 {} 해서 dict 반환)
         wrapped_form_data = {form_id: pure_form_data} if form_id else pure_form_data
+        logger.info(f"🔍 wrapped_form_data: {wrapped_form_data}")
+
 
         # 6) 원본에서 '폼_데이터' 제거
         if isinstance(original_wo_form, dict):
