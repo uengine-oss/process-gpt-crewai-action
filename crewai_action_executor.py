@@ -97,7 +97,7 @@ class CrewAIActionExecutor(AgentExecutor):
                     status={
                         "state": TaskState.completed,
                         "message": new_agent_text_message(
-                            json.dumps(wrapped_result, ensure_ascii=False),
+                            json.dumps(pure_form_data, ensure_ascii=False),
                             proc_inst_id,
                             task_id,
                         ),
