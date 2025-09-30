@@ -64,6 +64,7 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
     """
     try:
         # 1) 문자열 확보
+        logger.info(f"🔍 결과 구조화를 위한 작업 진행 = form_id: {form_id}")
         text = getattr(result, "raw", None) or str(result)
         # 2~4) 견고 파싱(코드펜스/백틱-값 수리 포함)
         output_val = _parse_json_guard(text)
