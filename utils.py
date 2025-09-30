@@ -6,19 +6,41 @@ from typing import Any, Dict, Tuple
 
 logger = logging.getLogger(__name__)
 _RE_CODE_BLOCK = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
+_RE_BACKTICK_VALUE = re.compile(r'(:\s*)`([\s\S]*?)`')  # JSON value 자리에 백틱으로 감싼 리터럴
+
+def _repair_backtick_value_literals(text: str) -> str:
+    """
+    JSON 객체 내에서 값이 백틱(` ... `)으로 감싸진 경우를
+    정상적인 JSON 문자열 값("...")으로 변환한다(개행/따옴표 등 안전 이스케이프).
+    예: "newsletter_report": `# 제목\n내용`  ->  "newsletter_report": "# 제목\\n내용"
+    """
+    def _repl(m: re.Match) -> str:
+        prefix = m.group(1)      # ":\s*"
+        raw = m.group(2)         # 백틱 내부 원문
+        escaped = json.dumps(raw) # JSON-safe string (따옴표/개행 이스케이프)
+        return f"{prefix}{escaped}"
+    return _RE_BACKTICK_VALUE.sub(_repl, text)
 
 def _parse_json_guard(text: str) -> Any:
     """문자열을 JSON으로 파싱."""
-    # 백틱을 쌍따옴표로 치환 (잘못된 JSON 형식 수정)
-    text = text.replace('`', '"')
-    
+    # 1) 코드펜스 내부만 추출(있으면)
+    original = text
+    m = _RE_CODE_BLOCK.search(text)
+    if m:
+        text = m.group(1)
+
+    # 2) 값 위치의 백틱 리터럴만 안전하게 JSON 문자열로 수리
+    repaired = _repair_backtick_value_literals(text)
+
+    # 3) 우선 JSON으로 시도
     try:
-        return json.loads(text)
+        return json.loads(repaired)
     except Exception:
         pass
+
+    # 4) JSON 실패 시, 파이썬 리터럴 파서로 보조 시도
     try:
-        val = ast.literal_eval(text)
-        return val
+        return ast.literal_eval(repaired)
     except Exception as e:
         raise ValueError(f"JSON 파싱 실패: {e}")
 
@@ -43,13 +65,7 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
     try:
         # 1) 문자열 확보
         text = getattr(result, "raw", None) or str(result)
-
-        # 2) ```json ... ``` 코드 블록 제거
-        m = _RE_CODE_BLOCK.search(text)
-        if m:
-            text = m.group(1)
-
-        # 3) JSON 파싱 (견고 가드레일)
+        # 2~4) 견고 파싱(코드펜스/백틱-값 수리 포함)
         output_val = _parse_json_guard(text)
 
         # dict가 아니면 원본 구조로는 의미 없으니 dict로 강제 사용 불가 → 빈 사본
