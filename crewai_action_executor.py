@@ -34,6 +34,8 @@ class CrewAIActionExecutor(AgentExecutor):
             task_id = row.get("id")
             form_id = row.get("form_id")
             
+            logger.info(f"🔍 form_id: {form_id}, task_id: {task_id}, proc_inst_id: {proc_inst_id}")
+            
             # Context variables 초기화
             set_context(
                 task_id=str(task_id) if task_id else "",
