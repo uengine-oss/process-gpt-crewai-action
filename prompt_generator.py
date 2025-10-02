@@ -1,8 +1,11 @@
 import time
 import json
 import logging
+import re
 from typing import Dict, List, Tuple, Optional, Any
+from utils import _parse_json_guard
 from processgpt_agent_utils.tools.knowledge_manager import Mem0Tool
+import jsonschema
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
@@ -17,6 +20,26 @@ class DynamicPromptGenerator:
     # ----------------------------
     # 헬퍼
     # ----------------------------
+    # 스키마 상수 (단일 출처)
+    TASK_ENVELOPE_SCHEMA = {
+        "type": "object",
+        "required": ["description", "expected_output"],
+        "properties": {
+            "description": {"type": "string", "minLength": 1},
+            "expected_output": {
+                "type": "object",
+                "required": ["상태", "수행한_작업", "폼_데이터"],
+                "properties": {
+                    "상태": {"type": "string", "enum": ["SUCCESS", "FAILED"]},
+                    "수행한_작업": {"type": "string", "minLength": 1},
+                    "폼_데이터": {"type": "object"}
+                },
+                "additionalProperties": True
+            }
+        },
+        "additionalProperties": False
+    }
+
     @staticmethod
     def _strip_code_fences(s: str) -> str:
         """코드 펜스(```json ... ```) 제거"""
@@ -38,6 +61,88 @@ class DynamicPromptGenerator:
             except Exception:
                 return str(value)
         return empty_label
+
+    @staticmethod
+    def _repair_expected_output_string(text: str) -> str:
+        """LLM이 expected_output을 다중라인/비이스케이프 문자열로 넣은 경우 안전 이스케이프 처리.
+        - "expected_output": "..." 구간을 찾아 내부 내용을 JSON-safe 문자열로 변환
+        - 다음 키가 이어지는 경우와 객체 종료로 이어지는 경우 모두 처리
+        """
+        def _escape_inner(s: str) -> str:
+            # json.dumps로 내부만 escape하고 양끝 따옴표는 제거
+            return json.dumps(s, ensure_ascii=False)[1:-1]
+
+        # 다음 키가 이어지는 경우:  "expected_output": "...",  "
+        pattern_next_key = re.compile(r'("expected_output"\s*:\s*)"([\s\S]*?)"(\s*,\s*\")')
+        new_text, count = pattern_next_key.subn(lambda m: f"{m.group(1)}\"{_escape_inner(m.group(2))}\"{m.group(3)}", text)
+        if count:
+            return new_text
+
+        # 객체 종료로 이어지는 경우:  "expected_output": "..." }
+        pattern_obj_end = re.compile(r'("expected_output"\s*:\s*)"([\s\S]*?)"(\s*\})')
+        new_text, count = pattern_obj_end.subn(lambda m: f"{m.group(1)}\"{_escape_inner(m.group(2))}\"{m.group(3)}", text)
+        if count:
+            return new_text
+
+        return text
+
+    def _parse_validate_with_guard(self, response_text: str) -> dict:
+        """코드펜스 제거 → 견고 파싱 → 필요시 expected_output 문자열 보정 → 스키마 검증(1차) →
+        실패 시 모델 리포맷 1회 후 재검증까지 수행. 최종적으로 dict 반환.
+        """
+        json_text = self._strip_code_fences(response_text)
+
+        # 1) 견고 파싱 1차
+        try:
+            data = _parse_json_guard(json_text)
+            logging.info("🛡️ 가드레일: 견고 파서(1차) 적용")
+            if not isinstance(data, dict):
+                raise ValueError("응답 최상위는 JSON 객체여야 합니다")
+        except Exception:
+            # 2) expected_output 문자열 보정 후 재파싱
+            logging.warning("🛡️ 가드레일: 1차 파싱 실패 → expected_output 문자열 보정 후 재파싱 시도")
+            repaired_once = self._repair_expected_output_string(json_text)
+            data = _parse_json_guard(repaired_once)
+            logging.info("🛡️ 가드레일: 보정 후 재파싱 성공")
+            if not isinstance(data, dict):
+                raise ValueError("응답 최상위는 JSON 객체여야 합니다")
+
+        # 3) 스키마 검증
+        try:
+            jsonschema.validate(data, self.TASK_ENVELOPE_SCHEMA)
+            return data
+        except Exception as ve:
+            logging.warning("🛡️ 스키마 검증 실패 → 모델 리포맷 1회 시도: %s", ve)
+            # 4) 모델 리포맷 1회
+            fix_prompt = (
+                "다음은 유효하지 않은 JSON입니다. 절대 설명하지 말고, 아래 JSON 스키마에 '정확히' 맞는 올바른 JSON만 출력하세요.\n\n"
+                "=== 잘못된 JSON ===\n" + json_text + "\n\n" +
+                "=== JSON 스키마 ===\n" + json.dumps(self.TASK_ENVELOPE_SCHEMA, ensure_ascii=False)
+            )
+            resp = self.llm.invoke([
+                {"role": "system", "content": "You fix JSON strictly to schema. Output JSON only."},
+                {"role": "user", "content": fix_prompt}
+            ])
+            fixed_raw = getattr(resp, "content", resp)
+            fixed_text = self._strip_code_fences(str(fixed_raw).strip())
+            fixed_data = _parse_json_guard(fixed_text)
+            jsonschema.validate(fixed_data, self.TASK_ENVELOPE_SCHEMA)
+            logging.info("🛡️ 스키마 리포맷 성공")
+            return fixed_data
+
+    @staticmethod
+    def _coerce_expected_output_to_string(expected_output_raw: Any) -> str:
+        """expected_output이 dict이면 pretty JSON 문자열, 문자열이면 가능한 한 객체로 파싱해 직렬화.
+        그 외에는 문자열 변환."""
+        if isinstance(expected_output_raw, dict):
+            return json.dumps(expected_output_raw, ensure_ascii=False, indent=2)
+        try:
+            eo_obj = _parse_json_guard(str(expected_output_raw))
+            if isinstance(eo_obj, dict):
+                return json.dumps(eo_obj, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        return str(expected_output_raw) if expected_output_raw else "없음"
 
     @staticmethod
     def _extract_form_parts(form_types: Optional[Dict], form_html: str = "") -> Tuple[Optional[Any], str, bool, bool]:
@@ -315,6 +420,7 @@ class DynamicPromptGenerator:
 
 **콘텐츠 생성 시 주의사항:**
 - 모든 가용 도구를 적극 활용하여 정보 수집:
+  * 반드시 human_asked 도구를 사용하여 질문 후 작업을 진행
   * 모든 도구룰 활용하고도, 정보가 부족할 경우, 배경 지식과 주어진 문맥 흐름을 기반으로 작성
   * 실제로 에이전트에게 주어진 모든 도구를 반드시 활용
   * 단! 메모리 관련 도구(mem0, memento)는 참고용으로, 이 결과가 없더라도 작업 중단 및 실패 금지
@@ -349,11 +455,14 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
 
 **역할**: 주어진 컨텍스트 정보를 바탕으로 에이전트가 수행할 구체적인 작업 지시(description)와 결과 형식(expected_output)을 생성합니다.
 **응답 형식**: 반드시 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 말고, 백틱을 사용하지 마세요.
-**도구 사용지침**: 현재 사용 가능한 툴 들을 적극 활용하되, 도구 결과에만 의존하지말고, 일반 배경지식 및 문맥 흐름으로 초안 작성
+**도구 사용지침**: 반드시 사용 가능한 툴 이름을 정확히 사용하고(None 제외), 현재 사용 가능한 툴 들을 적극 활용하되, 도구 결과에만 의존하지말고, 일반 배경지식 및 문맥 흐름으로 초안 작성
+**도구 선택 규칙(강제)**:
+- 컨텍스트의 "사용 가능한 도구(액션)" 목록 내에서만 선택/호출
+- "None"(또는 공란) 선택 금지. 목록 외 이름 금지(대소문자/공백 포함 정확히 일치)
 
 
 **expected_output 상세 작성 지침:**
-- 반드시 json 형식으로 작성해야 하며, 무슨 일이 있어도 백틱을 사용하지 마세요.
+- 반드시 JSON 객체(object)로 작성해야 하며, 무슨 일이 있어도 문자열로 감싸지 마세요. 백틱도 사용하지 마세요.
 - 다음 예시 구조를 반드시 준수하되, 값은 실제 작업 결과로 채워야 한다고 명시:
 
 **일반 모드 (is_multidata_mode="false" 또는 없음):**
@@ -408,7 +517,7 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
 - 🚨 중요: multidata_field는 실제 HTML의 name 속성을 활용하세요. 임의로 생성하지 말고 HTML을 그대로 적극 활용하여 구조를 구성하세요
 
 **응답 형식**: 오직 다음 JSON만 응답하세요:
-{"description": "Task 형식의 구체적 작업 지시", "expected_output": "결과 형식 안내"}
+{"description": "Task 형식의 구체적 작업 지시", "expected_output": {"상태": "SUCCESS 또는 FAILED", "수행한_작업": "자연어 텍스트", "폼_데이터": {}}}
 
 어떤 설명이나 추가 텍스트도 포함하지 마세요. 순수 JSON만 응답하세요."""
 
@@ -446,12 +555,17 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
 
                 logger.info("📝 [시도 %d/%d] LLM 응답 수신 - %.2fs, %d chars", attempt, max_attempts, elapsed, len(response_text))
 
-                # JSON 파싱 (코드 펜스 제거)
-                json_text = self._strip_code_fences(response_text)
-                data = json.loads(json_text)
+                # 파싱/보정/스키마검증/자가교정을 단일 함수로 정리
+                data = self._parse_validate_with_guard(response_text)
 
                 description = data.get("description", "")
-                expected_output = data.get("expected_output", "")
+                expected_output_raw = data.get("expected_output", "")
+                expected_output = self._coerce_expected_output_to_string(expected_output_raw)
+
+                # 동적 프롬프트 생성 결과 전체 로깅
+                logger.info("\n\n🧠 동적 프롬프트 Task(description):\n%s", description)
+                logger.info("\n\n📐 동적 프롬프트 Task(expected_output):\n%s", expected_output)
+
 
                 logger.info("✅ 동적 프롬프트 생성 완료")
                 return description, expected_output

@@ -64,7 +64,7 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
     """
     try:
         # 1) 문자열 확보
-        logger.info(f"🔍 결과 구조화를 위한 작업 진행 = form_id: {form_id}")
+        logger.info(f"\n\n🔍 결과 구조화를 위한 작업 진행 = form_id: {form_id}")
         text = getattr(result, "raw", None) or str(result)
         # 2~4) 견고 파싱(코드펜스/백틱-값 수리 포함)
         output_val = _parse_json_guard(text)
@@ -75,11 +75,13 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
         # 4) 폼_데이터 추출/정규화
         form_raw = output_val.get("폼_데이터") if isinstance(output_val, dict) else None
         pure_form_data = _to_form_dict(form_raw)
-        logger.info(f"🔍 pure_form_data: {pure_form_data}")
+        pure_form_preview = str(pure_form_data)[:200] + ("..." if len(str(pure_form_data)) > 200 else "")
+        logger.info(f"🔍 pure_form_data (처음 200자): {pure_form_preview}")
 
         # 5) form_id 래핑 (요청사항: form_id로 {} 해서 dict 반환)
         wrapped_form_data = {form_id: pure_form_data} if form_id else pure_form_data
-        logger.info(f"🔍 wrapped_form_data: {wrapped_form_data}")
+        wrapped_preview = str(wrapped_form_data)[:200] + ("..." if len(str(wrapped_form_data)) > 200 else "")
+        logger.info(f"🔍 wrapped_form_data (처음 200자): {wrapped_preview}")
 
 
         # 6) 원본에서 '폼_데이터' 제거

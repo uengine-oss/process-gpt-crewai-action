@@ -9,6 +9,7 @@ from a2a.utils import new_agent_text_message, new_text_artifact
 from crew_factory import create_crew
 from utils import convert_crew_output
 from processgpt_agent_utils.utils.context_manager import set_context
+from processgpt_agent_utils.tools.safe_tool_loader import SafeToolLoader
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
@@ -131,6 +132,8 @@ class CrewAIActionExecutor(AgentExecutor):
         except Exception as e:
             logger.error(f"❌ CrewAI 실행 중 오류 발생: {e}", exc_info=True)
             raise
+        finally:
+            SafeToolLoader.shutdown_all_adapters()
 
     @override
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
