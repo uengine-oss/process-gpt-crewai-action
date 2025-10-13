@@ -591,4 +591,4 @@ JSON 형식으로 응답: {{"description": "명확한 작업 지시와 실행 �
             type(last_error).__name__ if last_error else "UnknownError",
             str(last_error) if last_error else ""
         )
-        raise RuntimeError("Dynamic prompt generation failed") from last_error
+        raise RuntimeError("Dynamic prompt generation failed.") from last_error
