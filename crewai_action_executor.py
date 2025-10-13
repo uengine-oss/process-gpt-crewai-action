@@ -49,7 +49,7 @@ class CrewAIActionExecutor(AgentExecutor):
 
             # CrewAI 실행
             logger.info("\n\n🤖 CrewAI Action 크루 생성 및 실행")
-            crew = create_crew(
+            crew = await create_crew(
                 agent_info=extras.get("agents", []),
                 user_info=extras.get("users", []),
                 task_instructions=query,

@@ -59,7 +59,7 @@ def create_dynamic_agent(agent_info: Dict, tools: List) -> AgentWithProfile:
 # 태스크 생성
 # - 사용자 요청을 바탕으로 프롬프트를 만들고 플래닝 태스크를 생성합니다.
 # =============================
-def create_user_task(
+async def create_user_task(
     task_instructions: str,
     agent: Agent,
     form_types: Dict | None = None,
@@ -80,7 +80,7 @@ def create_user_task(
         agent_dict_list = agent_info if agent_info else []
         
         # 동적 프롬프트 생성
-        description, expected_output = prompt_generator.generate_task_prompt(
+        description, expected_output = await prompt_generator.generate_task_prompt(
             task_instructions=task_instructions,
             agent_info=agent_dict_list,
             form_types=form_types,
@@ -105,7 +105,7 @@ def create_user_task(
 # 크루 생성
 # - 에이전트와 태스크를 구성해 실행 가능한 크루를 만듭니다.
 # =============================
-def create_crew(
+async def create_crew(
     agent_info: List[Dict] | None = None,
     task_instructions: str = "",
     form_types: Dict | None = None,
@@ -175,7 +175,7 @@ def create_crew(
         manager = agents[0]
         
         # 사용자 요청 기반 태스크 생성 (매니저 에이전트에 할당)
-        task = create_user_task(
+        task = await create_user_task(
             task_instructions=task_instructions,
             agent=manager,
             form_types=form_types,
