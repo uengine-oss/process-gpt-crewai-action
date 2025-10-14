@@ -209,7 +209,7 @@ class DynamicPromptGenerator:
 {second_priority_text}
 
 **작업 범위 제한 원칙:**
-- 오로직 작업 지시사항과 피드백만의 작업 방향을 결정
+- 오로지지 작업 지시사항과 피드백만의 작업 방향을 결정
 - 명시된 작업만 수행, 비명시 연관작업/후속작업 절대 금지
 - 예시 1: "휴가 정보 저장" → 오직 휴가정보만 저장, 휴가잔여일수 수정/알림발송/승인처리 등 금지
 - 예시 2: "주문 정보 저장" → 오직 주문정보만 저장, 재고감소/포인트적립/알림발송 등 금지
@@ -275,7 +275,7 @@ class DynamicPromptGenerator:
 **콘텐츠 생성 시 주의사항:**
 - 모든 가용 도구를 적극 활용하여 정보 수집:
   * 보안 및 비밀번호, 개인정보 등 민감한 정보를 다루거나, 데이터 쓰기(INSERT/UPDATE/DELETE) 작업을 수행할 때는 human_asked 도구를 사용하여 질문 후 작업을 진행
-  * 모든 도구룰 활용하고도, 정보가 없거나 부족할 경우, 배경 지식과 주어진 문맥 흐름을 기반으로 작성
+  * 모든 도구룰 활용하고도, 정보가 없거나 부족할 경우, 배경 지식과 주어진 문맥 흐름을 기반으로 작를를
   * 도구에만 의존하지말고, 배경 지식과 주어진 문맥 흐름을 기반으로도 작성
   * 실제로 에이전트에게 주어진 모든 도구를 반드시 활용
   * 단! 메모리 관련 도구(mem0, memento)는 참고용으로, 이 결과가 없더라도 작업 중단 및 실패 금지
@@ -319,6 +319,10 @@ class DynamicPromptGenerator:
         is_multidata_mode = bool(form_html_text and 'is_multidata_mode="true"' in form_html_text)
 
         form_fields_json = json.dumps(form_fields, ensure_ascii=False, indent=2) if form_fields else '특별한 형식 제약 없음'
+        multidata_notice = (
+            '- 🚨 다중 데이터 모드: is_multidata_mode="true" 속성이 있으면 해당 필드는 배열 형태로 반환해야 함\n\n'
+            if is_multidata_mode else ''
+        )
 
         return (
             "다음 정보를 바탕으로 CrewAI Task expected_output 프롬프트를 생성하세요:\n\n"
@@ -329,7 +333,7 @@ class DynamicPromptGenerator:
             "- 역할: 최종 결과물의 구조와 필드 정의, 선택형 항목(items) 제공\n"
             "- 활용: expected_output 구조 설계와 폼_데이터 키/값 결정에 사용\n"
             f"{('- 주의: key 값을 변경 없이 정확히 필드명으로 사용해야 함' if has_form_types else '')}\n"
-            f"{('- 🚨 다중 데이터 모드: is_multidata_mode="true" 속성이 있으면 해당 필드는 배열 형태로 반환해야 함' if is_multidata_mode else '')}\n\n"
+            f"{multidata_notice}"
             "섹션 2) 선택형(radio/select) 처리\n"
             "- form_fields의 type이 'radio' 또는 'select'인 경우, 값 목록은 form_types의 HTML에서 추출\n"
             "- 예: <radio-field name=\"review_result\" items=\"[{{{'approve':'승인'}}},{{{'reject':'반려'}}}]\" ...>\n"

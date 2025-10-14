@@ -2,6 +2,7 @@ import asyncio
 import logging
 from processgpt_agent_sdk.processgpt_agent_framework import ProcessGPTAgentServer
 from crewai_action_executor import CrewAIActionExecutor
+from health_server import start_health_server
 
 # 로깅 설정
 logging.basicConfig(
@@ -14,6 +15,8 @@ async def main():
     """메인 서버 실행 함수"""
     try:
         logger.info("🚀 CrewAI Action Server 시작 중...")
+        # 헬스 서버 기동
+        start_health_server(host="0.0.0.0", port=8000)
         
         # 실행기 생성
         executor = CrewAIActionExecutor()

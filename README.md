@@ -178,6 +178,42 @@ kubectl logs -f crewai-action-deployment-<pod-id>
 python crewai_action_server.py > output.log 2>&1
 ```
 
+### 5. 헬스 체크 및 스모크 테스트
+
+- 헬스 엔드포인트: `GET /health` → `{ "status": "ok" }`
+- 로컬 확인:
+```bash
+curl -f http://localhost:8000/health
+```
+- 스모크 테스트 스크립트:
+```bash
+python smoke_test.py              # 기본: http://localhost:8000
+SMOKE_BASE_URL=http://svc:8000 python smoke_test.py
+```
+
+### 6. Kubernetes 프로브 예시
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 5
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 15
+  periodSeconds: 10
+```
+
+### 7. 배포 후 롤아웃 확인
+
+```bash
+kubectl rollout status deploy/crewai-action-deployment -n dev --timeout=180s
+```
+
 ## 🔧 주요 특징
 
 ### ✅ 장점
