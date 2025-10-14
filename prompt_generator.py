@@ -329,7 +329,7 @@ class DynamicPromptGenerator:
             "- 역할: 최종 결과물의 구조와 필드 정의, 선택형 항목(items) 제공\n"
             "- 활용: expected_output 구조 설계와 폼_데이터 키/값 결정에 사용\n"
             f"{('- 주의: key 값을 변경 없이 정확히 필드명으로 사용해야 함' if has_form_types else '')}\n"
-            f"{('- 🚨 다중 데이터 모드: is_multidata_mode=\"true\" 속성이 있으면 해당 필드는 배열 형태로 반환해야 함' if is_multidata_mode else '')}\n\n"
+            f"{('- 🚨 다중 데이터 모드: is_multidata_mode="true" 속성이 있으면 해당 필드는 배열 형태로 반환해야 함' if is_multidata_mode else '')}\n\n"
             "섹션 2) 선택형(radio/select) 처리\n"
             "- form_fields의 type이 'radio' 또는 'select'인 경우, 값 목록은 form_types의 HTML에서 추출\n"
             "- 예: <radio-field name=\"review_result\" items=\"[{{{'approve':'승인'}}},{{{'reject':'반려'}}}]\" ...>\n"
