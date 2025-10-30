@@ -3,6 +3,7 @@ import json
 import logging
 import asyncio
 from typing import Dict, List, Optional, Any, Tuple
+from processgpt_agent_utils.tools.dmn_rule_tool import DMNRuleTool
 from processgpt_agent_utils.tools.knowledge_manager import Mem0Tool
 
 # 로깅 설정
@@ -34,6 +35,11 @@ class DynamicPromptGenerator:
             feedback_summary=feedback_summary,
         )
 
+        dmn_analysis = self._collect_dmn_analysis(
+            agent_info=agent_info,
+            task_instructions=task_instructions,
+        )
+
         # 설명용 브리프: 폼 정보 제외
         desc_brief = self._build_description_prompt(
             task_instructions=task_instructions,
@@ -42,6 +48,7 @@ class DynamicPromptGenerator:
             feedback_summary=feedback_summary,
             current_activity_name=current_activity_name,
             learned_knowledge=learned_knowledge,
+            dmn_analysis=dmn_analysis,
         )
 
         # 결과물용 브리프: 폼 정보만 포함
@@ -125,14 +132,17 @@ class DynamicPromptGenerator:
         feedback_summary: str,
         current_activity_name: str,
         learned_knowledge: Dict[str, Any],
+        dmn_analysis: Dict[str, str],
     ) -> str:
         """설명 프롬프트: form_types/form_html 제외, 나머지 컨텍스트를 원문 스타일로 포함."""
         
         has_feedback = bool(feedback_summary and feedback_summary.strip() and feedback_summary.strip() != '없음')
         has_learned = bool(learned_knowledge and any(str(v).strip() for v in learned_knowledge.values()))
+        has_dmn = bool(dmn_analysis and any(str(v).strip() for v in dmn_analysis.values()))
         agent_info_json = json.dumps(agent_info or [], ensure_ascii=False, indent=2) if agent_info else '정보 없음'
         user_info_json = json.dumps(user_info or [], ensure_ascii=False, indent=2) if user_info else '정보 없음'
         learned_json = json.dumps(learned_knowledge or {}, ensure_ascii=False, indent=2) if has_learned else '관련 경험 없음'
+        dmn_json = json.dumps(dmn_analysis or {}, ensure_ascii=False, indent=2) if has_dmn else '관련 규칙 분석 없음'
 
         if has_feedback:
             first_priority_text = """🔥 1순위 - 피드백 절대 우선:
@@ -195,6 +205,11 @@ class DynamicPromptGenerator:
 - 활용: 작업 품질 향상과 실수 방지를 위한 참고 자료
 {('- 참고: 현재 수행할 작업을 더 완벽하게 수행하기 위한 디테일 보완에 활용' if has_learned else '- 참고: 학습 자료 부족 시에도 작업 중단 금지, 일반 지식으로 초안 작성')}
 
+**DMN 규칙 분석 (dmn_rule):**
+- 값: {dmn_json}
+- 역할: 규칙을 기반으로 추론된 답변 제공(학습된 경험보다 우선 반영)
+- 활용: 작업지시사항 해석 및 원자 작업 도출 시 규칙으로 추론된 결과를 최우선으로 반영
+
 **피드백 (feedback_summary):**
 - 값: {feedback_summary if has_feedback else '없음'}
 - 역할: 이전 작업에 대한 수정 요구사항 (최고 우선순위)
@@ -216,15 +231,12 @@ class DynamicPromptGenerator:
 - 예시 1: "휴가 정보 저장" → 오직 휴가정보만 저장, 휴가잔여일수 수정/알림발송/승인처리 등 금지
 - 예시 2: "주문 정보 저장" → 오직 주문정보만 저장, 재고감소/포인트적립/알림발송 등 금지
 - 예시 3: "사용자 정보 수정" → 명시된 사용자의 명시된 필드만 수정, 다른 사용자/필드 수정 금지
-- 범위 모호 시: human_asked 도구로 "이 작업 범위가 맞는지" 사용자 확인 후 진행 (text 형식으로 질문)
-- DMN 규칙 도구(dmn_rule)로 관련 규칙 확인하고, 규칙 기반 추론 내용을 바탕으로 작업 수행
 
 **다중 작업 처리 원칙:**
 - 반드시 작업지시사항에서 실행 동사를 기준으로 원자 작업을 모두 추출하여 목록화(예: 저장, 확인, 조회 등)
 - 모든 원자 작업을 반드시 수행해야 함 
 - 즉, 작업지시에 여러 작업이 있을 경우 해당 작업을 모두 수행해야 함
 - 작업 간 선후관계/의존성을 파악하여 올바른 순서로 실행
-- 쓰기 작업(INSERT/UPDATE/DELETE)은 human_asked(type="confirm") 승인 후에만 수행
 
 === 💾 섹션 3: 데이터 쓰기/수정 시 정확성 보장 ===
 
@@ -233,7 +245,6 @@ class DynamicPromptGenerator:
 2. 부족한 데이터는 읽기전용 도구로 조회/검증/보완 (SELECT 쿼리, 검색 API, 메시징 API 등)
 3. 모든 필요 데이터가 완전해진 후에만 쓰기 작업 수행
 4. 데이터를 저장 및 수정할 경우, 주어진 값을 최대한 활용해서 다른 테이블의 값을 조회하는 등, 툴을 적극 활용해서 완전한 데이터를 생성 및 수정해야 함, 절대 누락되는 컬럼이나 데이터가 있어서는 안됩니다.
-5. INSERT/UPDATE/DELETE(저장/수정/삭제) 수행 전, 반드시 human_asked(type="confirm")로 사용자 승인 획득(승인 없으면 절대 실행 금지)
 
 === 🎨 섹션 4: 콘텐츠 생성 시 가이드라인 ===
 
@@ -277,12 +288,10 @@ class DynamicPromptGenerator:
 
 **콘텐츠 생성 시 주의사항:**
 - 모든 가용 도구를 적극 활용하여 정보 수집:
-  * 보안 및 비밀번호, 개인정보 등 민감한 정보를 다루거나, 데이터 쓰기(INSERT/UPDATE/DELETE) 작업을 수행할 때는 human_asked 도구를 사용하여 질문 후 작업을 진행
   * 모든 도구를 활용하고도, 정보가 없거나 부족할 경우, 배경 지식과 주어진 문맥 흐름을 기반으로 작성
   * 도구에만 의존하지말고, 배경 지식과 주어진 문맥 흐름을 기반으로도 작성
   * 실제로 에이전트에게 주어진 모든 도구를 반드시 활용
   * 단! 메모리 관련 도구(mem0, memento)는 보조 참고용으로, 이 결과가 없더라도 작업 중단 및 실패 금지
-  * 규칙 관련 도구(dmn_rule)는 최우선 필수 실행 도구로, 규칙이 있으면 반드시 그 규칙을 기반으로 모든 추론과 결정을 수행하고, mem0보다 우선적으로 활용
   * 폼 요구사항과 작업 맥락에 맞는 적절한 내용 생성
   * 여러 도구를 사용하여, 최대한 많은 정보를 수집
   (예 : DB 조회 관련 작업이면, supabase 툴을 사용하여 데이터를 조회)
@@ -295,7 +304,6 @@ class DynamicPromptGenerator:
 - 특별히 주의해야 할 요구사항이 있는지
 - 범위를 벗어난 작업은 절대 수행하지 않을 것
 - 데이터 처리 시 완전성과 정확성을 보장할 것
-- 규칙 기반 판단이나 의사결정이 필요한 경우, 반드시 규칙 관련 도구(dmn_rule)를 최우선으로 사용하여 관련 규칙을 탐색하고 추론한 결과를 반영할 것
 
 **성공 기준:**
 - 명시된 목표들이 전부 달성되어야 함 (일부만 달성하면 실패이며, 실패 시 반드시 사유를 디테일하게 명시)
@@ -391,3 +399,30 @@ class DynamicPromptGenerator:
             "역할: 주어진 폼 정보(form_types/form_html)만을 바탕으로 결과 형식(expected_output)을 생성합니다.\n"
             "응답 형식: 오직 JSON 객체로만 응답하세요. 백틱/코드블록/문자열 포장 금지."
         )
+    
+    def _collect_dmn_analysis(
+        self,
+        agent_info: List[Dict],
+        task_instructions: str,
+    ) -> Dict[str, str]:
+        """에이전트별 DMN 규칙 분석 결과 수집: task_instructions를 dmn_rule 쿼리로 사용"""
+        if not task_instructions or not task_instructions.strip():
+            return {}
+
+        dmn_results: Dict[str, str] = {}
+        for ag in agent_info:
+            agent_id = ag.get("id") or ag.get("user_id")
+            tenant_id = ag.get("tenant_id")
+            role = ag.get("role", "Unknown")
+            if not (agent_id and tenant_id):
+                continue
+            try:
+                tool = DMNRuleTool(tenant_id=tenant_id, user_id=agent_id)
+                result = tool._run(task_instructions.strip())
+                if result and isinstance(result, str):
+                    dmn_results[role] = result
+            except Exception as e:
+                logger.warning("⚠️ 에이전트 %s DMN 규칙 분석 실패: %s", role, e)
+
+        return dmn_results
+
