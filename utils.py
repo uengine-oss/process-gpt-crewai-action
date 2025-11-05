@@ -21,16 +21,64 @@ def _repair_backtick_value_literals(text: str) -> str:
         return f"{prefix}{escaped}"
     return _RE_BACKTICK_VALUE.sub(_repl, text)
 
-def _parse_json_guard(text: str) -> Any:
-    """문자열을 JSON으로 파싱."""
+def _extract_json_from_text(text: str) -> str:
+    """
+    텍스트에서 JSON 객체를 추출합니다.
+    1. 코드펜스 내부를 우선 추출
+    2. 없으면 마지막에 나오는 JSON 객체를 찾아 추출 (중괄호 카운팅 방식)
+    """
     # 1) 코드펜스 내부만 추출(있으면)
-    original = text
     m = _RE_CODE_BLOCK.search(text)
     if m:
-        text = m.group(1)
+        return m.group(1)
+    
+    # 2) 코드펜스가 없으면 마지막에 나오는 JSON 객체 찾기
+    # 텍스트 끝에서부터 역순으로 검색하여 첫 번째 '{'를 찾고, 중괄호 매칭
+    last_open_brace = text.rfind('{')
+    if last_open_brace == -1:
+        # 중괄호가 없으면 원본 반환
+        return text
+    
+    # 중괄호 카운팅으로 올바른 JSON 객체 추출
+    brace_count = 0
+    start_idx = last_open_brace
+    in_string = False
+    escape_next = False
+    
+    for i in range(start_idx, len(text)):
+        char = text[i]
+        
+        if escape_next:
+            escape_next = False
+            continue
+        
+        if char == '\\':
+            escape_next = True
+            continue
+        
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        
+        if not in_string:
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    # 완전한 JSON 객체를 찾음
+                    return text[start_idx:i+1]
+    
+    # 완전한 JSON 객체를 찾지 못했으면 마지막 '{'부터 끝까지 반환
+    return text[start_idx:]
+
+def _parse_json_guard(text: str) -> Any:
+    """문자열을 JSON으로 파싱."""
+    # 1) JSON 객체 추출 (코드펜스 또는 텍스트 끝의 JSON)
+    extracted = _extract_json_from_text(text)
 
     # 2) 값 위치의 백틱 리터럴만 안전하게 JSON 문자열로 수리
-    repaired = _repair_backtick_value_literals(text)
+    repaired = _repair_backtick_value_literals(extracted)
 
     # 3) 우선 JSON으로 시도
     try:
