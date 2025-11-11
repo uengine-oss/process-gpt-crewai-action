@@ -9,6 +9,14 @@ from prompt_generator import DynamicPromptGenerator
 # 로깅 설정
 logger = logging.getLogger(__name__)
 
+# MCP/HTTP 연결 오류를 위한 예외 타입 임포트 시도
+try:
+    import httpx
+    HTTP_CONNECTION_ERRORS = (httpx.RemoteProtocolError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)
+except ImportError:
+    # httpx가 없으면 기본 예외만 사용
+    HTTP_CONNECTION_ERRORS = (ConnectionError,)
+
 # 글로벌 이벤트 훅 등록 (한 번만 실행)
 _event_manager = None
 
@@ -147,13 +155,33 @@ async def create_crew(
                 tool_names = [tool.strip() for tool in tools_str.split(',') if tool.strip()] if tools_str else []
                 agent_name = info.get('username', 'unknown')
                 logger.info(f"🔧 에이전트 '{agent_name}') 툴 목록: {tool_names}")
-                loader = SafeToolLoader(tenant_id=tenant_id, user_id=user_id, agent_name=agent_name, mcp_config=tenant_mcp)
                 
+                tools = []
+                loader = None
                 try:
+                    loader = SafeToolLoader(tenant_id=tenant_id, user_id=user_id, agent_name=agent_name, mcp_config=tenant_mcp)
                     tools = loader.create_tools_from_names(tool_names)
+                    logger.info(f"✅ 에이전트 '{agent_name}') 툴 로딩 성공: {len(tools)}개")
+                except HTTP_CONNECTION_ERRORS as e:
+                    # HTTP/MCP 연결 오류인 경우 - 도구 없이 계속 진행
+                    logger.warning(f"⚠️ 에이전트 '{agent_name}') 툴 로딩 실패 (HTTP/MCP 연결 오류) - 도구 없이 계속 진행: {type(e).__name__}: {e}")
+                    tools = []  # 빈 도구 리스트로 계속 진행
+                    # 로더가 생성되었지만 실패한 경우 정리 시도
+                    if loader is not None:
+                        try:
+                            SafeToolLoader.shutdown_all_adapters()
+                        except Exception as cleanup_error:
+                            logger.warning(f"⚠️ MCP 어댑터 정리 중 오류(무시): {cleanup_error}")
                 except Exception as e:
-                    logger.warning(f"⚠️ 에이전트 '{agent_name}') 툴 로딩 실패(전파): {e}")
-                    raise
+                    # 기타 예외인 경우도 도구 없이 계속 진행하되 로그 기록
+                    logger.warning(f"⚠️ 에이전트 '{agent_name}') 툴 로딩 실패 (기타 오류) - 도구 없이 계속 진행: {type(e).__name__}: {e}")
+                    tools = []  # 빈 도구 리스트로 계속 진행
+                    # 로더가 생성되었지만 실패한 경우 정리 시도
+                    if loader is not None:
+                        try:
+                            SafeToolLoader.shutdown_all_adapters()
+                        except Exception as cleanup_error:
+                            logger.warning(f"⚠️ MCP 어댑터 정리 중 오류(무시): {cleanup_error}")
                 
                 agent = create_dynamic_agent(info, tools)
                 agents.append(agent)
@@ -163,7 +191,7 @@ async def create_crew(
             except Exception as e:
                 username = info.get('username') or info.get('name') or 'Unknown'
                 agent_name = info.get('name') or info.get('role') or "Agent"
-                logger.warning(f"⚠️ 에이전트 '{agent_name}' ({info.get('role', 'Unknown')}) 생성 실패(전파) (username: {username}) - {e}")
+                logger.error(f"❌ 에이전트 '{agent_name}' ({info.get('role', 'Unknown')}) 생성 실패 (username: {username}) - {e}", exc_info=True)
                 raise
         
         if not agents:

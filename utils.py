@@ -93,7 +93,7 @@ def _parse_json_guard(text: str) -> Any:
         raise ValueError(f"JSON 파싱 실패: {e}")
 
 def _to_form_dict(form_data: Any) -> Dict[str, Any]:
-    """'폼_데이터'가 dict이면 그대로, list면 {'key':'text'} 매핑. 그 외 타입은 빈 dict."""
+    """'폼_데이터'가 dict이면 그대로, list면 {'key':'text'} 매핑. str이면 {'content': str}. 그 외 타입은 빈 dict."""
     if isinstance(form_data, dict):
         return form_data
     if isinstance(form_data, list):
@@ -103,6 +103,8 @@ def _to_form_dict(form_data: Any) -> Dict[str, Any]:
             for item in form_data
             if isinstance(item, dict) and "key" in item
         }
+    if isinstance(form_data, str):
+        return {"content": form_data}
     return {}
 
 def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
@@ -117,11 +119,16 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
         # 2~4) 견고 파싱(코드펜스/백틱-값 수리 포함)
         output_val = _parse_json_guard(text)
 
+        # 일부 모델/도구는 결과를 최상위가 아닌 'result' 키 아래에 감싸서 반환한다.
+        # 이 경우 실제 유의미한 페이로드는 output_val['result'] 이므로 이를 기준으로 처리한다.
+        if isinstance(output_val, dict) and isinstance(output_val.get("result"), dict):
+            output_val = output_val["result"]
+
         # dict가 아니면 원본 구조로는 의미 없으니 dict로 강제 사용 불가 → 빈 사본
         original_wo_form = dict(output_val) if isinstance(output_val, dict) else {}
 
         # 4) 폼_데이터 추출/정규화
-        form_raw = output_val.get("폼_데이터") if isinstance(output_val, dict) else None
+        form_raw = output_val.get("폼_데이터") if isinstance(output_val, dict) else output_val
         pure_form_data = _to_form_dict(form_raw)
         pure_form_preview = str(pure_form_data)[:200] + ("..." if len(str(pure_form_data)) > 200 else "")
         logger.info(f"🔍 pure_form_data (처음 200자): {pure_form_preview}")

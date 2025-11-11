@@ -39,62 +39,62 @@ class CrewAIActionExecutor(AgentExecutor):
             logger.info(f"🔍 Deterministic Code Tool 실행 시작 - tenant_id: {tenant_id}, task_id: {task_id}")
             det_tool = DeterministicCodeTool(tenant_id=tenant_id, todo_id=task_id)
             job_uuid = str(uuid.uuid4())
-            # 결정론적 코드 실행 결과 이벤트
-            event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    status={
-                        "state": TaskState.working,
-                        "message": new_agent_text_message(
-                            json.dumps(
-                                {
-                                    "role": "결정론적 코드 실행 결과",
-                                    "name": "결정론적 코드 실행 결과",
-                                    "goal": "결정론적 코드 실행의 결과를 보고합니다.",
-                                    "agent_profile": "/images/chat-icon.png",
-                                },
-                                ensure_ascii=False,
-                            ),
-                            proc_inst_id,
-                            task_id,
-                        ),
-                    },
-                    final=False,
-                    contextId=proc_inst_id,
-                    taskId=task_id,
-                    metadata={
-                        "crew_type": "result",
-                        "event_type": "task_started",
-                        "job_id": job_uuid,
-                    },
-                )
-            )
     
             det_result = det_tool._run(tenant_id=tenant_id, todo_id=task_id)
             logger.info(f"🔍 Deterministic Code Tool 실행 결과: {det_result}")
-            # 결정론적 코드 실행 결과 이벤트
-            event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    status={
-                        "state": TaskState.completed,
-                        "message": new_agent_text_message(
-                            det_result,
-                            proc_inst_id,
-                            task_id,
-                        ),
-                    },
-                    final=False,
-                    contextId=proc_inst_id,
-                    taskId=task_id,
-                    metadata={
-                        "crew_type": "result",
-                        "event_type": "task_completed",
-                        "job_id": job_uuid,
-                    },
-                )
-            )
-            
             det_result_json = json.loads(det_result)
+            
             if det_result_json.get("ok"):
+                # 결정론적 코드 실행 결과 이벤트
+                event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        status={
+                            "state": TaskState.working,
+                            "message": new_agent_text_message(
+                                json.dumps(
+                                    {
+                                        "role": "결정론적 코드 실행 결과",
+                                        "name": "결정론적 코드 실행 결과",
+                                        "goal": "결정론적 코드 실행의 결과를 보고합니다.",
+                                        "agent_profile": "/images/chat-icon.png",
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                                proc_inst_id,
+                                task_id,
+                            ),
+                        },
+                        final=False,
+                        contextId=proc_inst_id,
+                        taskId=task_id,
+                        metadata={
+                            "crew_type": "result",
+                            "event_type": "task_started",
+                            "job_id": job_uuid,
+                        },
+                    )
+                )
+
+                event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        status={
+                            "state": TaskState.completed,
+                            "message": new_agent_text_message(
+                                det_result,
+                                proc_inst_id,
+                                task_id,
+                            ),
+                        },
+                        final=False,
+                        contextId=proc_inst_id,
+                        taskId=task_id,
+                        metadata={
+                            "crew_type": "result",
+                            "event_type": "task_completed",
+                            "job_id": job_uuid,
+                        },
+                    )
+                )
                 logger.info("🔍 Deterministic Code 실행 완료 — 최종 결과 이벤트 발송")
                 end_job_uuid = str(uuid.uuid4())
                 
@@ -233,50 +233,51 @@ class CrewAIActionExecutor(AgentExecutor):
             job_uuid = str(uuid.uuid4())
             logger.info("\n\n📤 최종 결과 이벤트 발송")
             
-            event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    status={
-                        "state": TaskState.working,
-                        "message": new_agent_text_message(
-                            json.dumps({"role": "최종 결과 반환", 
-                                        "name": "최종 결과 반환", 
-                                        "goal": "요청된 폼 형식에 맞는 최종 결과를 반환합니다.", 
-                                        "agent_profile": "/images/chat-icon.png"}, ensure_ascii=False),
-                            proc_inst_id,
-                            task_id,
-                        ),
-                    },
-                    final=False,
-                    contextId=proc_inst_id,
-                    taskId=task_id,
-                    metadata={
-                        "crew_type": "result",
-                        "event_type": "task_started",
-                        "job_id": job_uuid,
-                    },
+            if pure_form_data and pure_form_data != {}:
+                event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        status={
+                            "state": TaskState.working,
+                            "message": new_agent_text_message(
+                                json.dumps({"role": "최종 결과 반환", 
+                                            "name": "최종 결과 반환", 
+                                            "goal": "요청된 폼 형식에 맞는 최종 결과를 반환합니다.", 
+                                            "agent_profile": "/images/chat-icon.png"}, ensure_ascii=False),
+                                proc_inst_id,
+                                task_id,
+                            ),
+                        },
+                        final=False,
+                        contextId=proc_inst_id,
+                        taskId=task_id,
+                        metadata={
+                            "crew_type": "result",
+                            "event_type": "task_started",
+                            "job_id": job_uuid,
+                        },
+                    )
                 )
-            )
 
-            event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    status={
-                        "state": TaskState.completed,
-                        "message": new_agent_text_message(
-                            json.dumps(pure_form_data, ensure_ascii=False),
-                            proc_inst_id,
-                            task_id,
-                        ),
-                    },
-                    final=False,
-                    contextId=proc_inst_id,
-                    taskId=task_id,
-                    metadata={
-                        "crew_type": "result",
-                        "event_type": "task_completed",
-                        "job_id": job_uuid,
-                    },
+                event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        status={
+                            "state": TaskState.completed,
+                            "message": new_agent_text_message(
+                                json.dumps(pure_form_data, ensure_ascii=False),
+                                proc_inst_id,
+                                task_id,
+                            ),
+                        },
+                        final=False,
+                        contextId=proc_inst_id,
+                        taskId=task_id,
+                        metadata={
+                            "crew_type": "result",
+                            "event_type": "task_completed",
+                            "job_id": job_uuid,
+                        },
+                    )
                 )
-            )
 
             event_queue.enqueue_event(
                 TaskArtifactUpdateEvent(
@@ -300,7 +301,14 @@ class CrewAIActionExecutor(AgentExecutor):
             logger.error(f"❌ CrewAI 실행 중 오류 발생: {e}", exc_info=True)
             raise
         finally:
-            SafeToolLoader.shutdown_all_adapters()
+            # MCP 어댑터 정리 - 연결 오류가 있어도 정리 시도
+            try:
+                logger.info("🔧 MCP 어댑터 정리 시작...")
+                SafeToolLoader.shutdown_all_adapters()
+                logger.info("✅ MCP 어댑터 정리 완료")
+            except Exception as cleanup_error:
+                # 정리 중 오류가 발생해도 로그만 남기고 계속 진행
+                logger.warning(f"⚠️ MCP 어댑터 정리 중 오류 발생 (무시): {cleanup_error}", exc_info=True)
 
     @override
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
