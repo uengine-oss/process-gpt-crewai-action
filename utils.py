@@ -128,7 +128,7 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
         original_wo_form = dict(output_val) if isinstance(output_val, dict) else {}
 
         # 4) 폼_데이터 추출/정규화
-        form_raw = output_val.get("폼_데이터") if isinstance(output_val, dict) else output_val
+        form_raw = output_val.get(form_id) if isinstance(output_val, dict) else output_val
         pure_form_data = _to_form_dict(form_raw)
         pure_form_preview = str(pure_form_data)[:200] + ("..." if len(str(pure_form_data)) > 200 else "")
         logger.info(f"🔍 pure_form_data (처음 200자): {pure_form_preview}")
@@ -137,11 +137,6 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
         wrapped_form_data = {form_id: pure_form_data} if form_id else pure_form_data
         wrapped_preview = str(wrapped_form_data)[:200] + ("..." if len(str(wrapped_form_data)) > 200 else "")
         logger.info(f"🔍 wrapped_form_data (처음 200자): {wrapped_preview}")
-
-
-        # 6) 원본에서 '폼_데이터' 제거
-        if isinstance(original_wo_form, dict):
-            original_wo_form.pop("폼_데이터", None)
 
         return pure_form_data, wrapped_form_data, original_wo_form
 
