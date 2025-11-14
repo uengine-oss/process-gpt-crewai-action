@@ -12,7 +12,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def main():
-    """메인 서버 실행 함수"""
+    """메인 서버 실행 함수 with FastAPI"""
     try:
         logger.info("🚀 CrewAI Action Server 시작 중...")
         # 헬스 서버 기동

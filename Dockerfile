@@ -13,8 +13,8 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# 2. Install Node.js 18.x and Supabase MCP Server globally
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+# 2. Install Node.js 20.x and Supabase MCP Server globally
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get update \
  && apt-get install -y --no-install-recommends nodejs \
  && npm install -g @supabase/mcp-server-supabase@latest \
