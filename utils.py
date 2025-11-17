@@ -21,64 +21,9 @@ def _repair_backtick_value_literals(text: str) -> str:
         return f"{prefix}{escaped}"
     return _RE_BACKTICK_VALUE.sub(_repl, text)
 
-def _extract_json_from_text(text: str) -> str:
-    """
-    텍스트에서 JSON 객체를 추출합니다.
-    1. 코드펜스 내부를 우선 추출
-    2. 없으면 마지막에 나오는 JSON 객체를 찾아 추출 (중괄호 카운팅 방식)
-    """
-    # 1) 코드펜스 내부만 추출(있으면)
-    m = _RE_CODE_BLOCK.search(text)
-    if m:
-        return m.group(1)
-    
-    # 2) 코드펜스가 없으면 마지막에 나오는 JSON 객체 찾기
-    # 텍스트 끝에서부터 역순으로 검색하여 첫 번째 '{'를 찾고, 중괄호 매칭
-    last_open_brace = text.rfind('{')
-    if last_open_brace == -1:
-        # 중괄호가 없으면 원본 반환
-        return text
-    
-    # 중괄호 카운팅으로 올바른 JSON 객체 추출
-    brace_count = 0
-    start_idx = last_open_brace
-    in_string = False
-    escape_next = False
-    
-    for i in range(start_idx, len(text)):
-        char = text[i]
-        
-        if escape_next:
-            escape_next = False
-            continue
-        
-        if char == '\\':
-            escape_next = True
-            continue
-        
-        if char == '"' and not escape_next:
-            in_string = not in_string
-            continue
-        
-        if not in_string:
-            if char == '{':
-                brace_count += 1
-            elif char == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    # 완전한 JSON 객체를 찾음
-                    return text[start_idx:i+1]
-    
-    # 완전한 JSON 객체를 찾지 못했으면 마지막 '{'부터 끝까지 반환
-    return text[start_idx:]
-
 def _parse_json_guard(text: str) -> Any:
     """문자열을 JSON으로 파싱."""
-    # 1) JSON 객체 추출 (코드펜스 또는 텍스트 끝의 JSON)
-    extracted = _extract_json_from_text(text)
-
-    # 2) 값 위치의 백틱 리터럴만 안전하게 JSON 문자열로 수리
-    repaired = _repair_backtick_value_literals(extracted)
+    repaired = _repair_backtick_value_literals(text)
 
     # 3) 우선 JSON으로 시도
     try:
@@ -122,13 +67,15 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
         # 일부 모델/도구는 결과를 최상위가 아닌 'result' 키 아래에 감싸서 반환한다.
         # 이 경우 실제 유의미한 페이로드는 output_val['result'] 이므로 이를 기준으로 처리한다.
         if isinstance(output_val, dict) and isinstance(output_val.get("result"), dict):
-            output_val = output_val["result"]
+            output_val = {
+                "폼_데이터": output_val["result"]
+            }
 
         # dict가 아니면 원본 구조로는 의미 없으니 dict로 강제 사용 불가 → 빈 사본
         original_wo_form = dict(output_val) if isinstance(output_val, dict) else {}
 
         # 4) 폼_데이터 추출/정규화
-        form_raw = output_val.get(form_id) if isinstance(output_val, dict) else output_val
+        form_raw = output_val.get("폼_데이터") if isinstance(output_val, dict) else None
         pure_form_data = _to_form_dict(form_raw)
         pure_form_preview = str(pure_form_data)[:200] + ("..." if len(str(pure_form_data)) > 200 else "")
         logger.info(f"🔍 pure_form_data (처음 200자): {pure_form_preview}")
@@ -137,6 +84,10 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
         wrapped_form_data = {form_id: pure_form_data} if form_id else pure_form_data
         wrapped_preview = str(wrapped_form_data)[:200] + ("..." if len(str(wrapped_form_data)) > 200 else "")
         logger.info(f"🔍 wrapped_form_data (처음 200자): {wrapped_preview}")
+        
+        # 6) 원본에서 '폼_데이터' 제거
+        if isinstance(original_wo_form, dict):
+            original_wo_form.pop("폼_데이터", None)
 
         return pure_form_data, wrapped_form_data, original_wo_form
 

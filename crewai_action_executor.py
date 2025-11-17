@@ -205,11 +205,11 @@ class CrewAIActionExecutor(AgentExecutor):
 
             logger.info(f"🔧 Context variables 초기화 완료 - task_id: {task_id}, proc_inst_id: {proc_inst_id}, crew_type: action")
 
-            if extras.get("summarized_feedback", "") == "":
-                # 결정론적 코드 실행: 성공 시 이벤트 발행 후 조기 종료
-                handled = await self._run_deterministic(str(tenant_id), str(task_id), str(proc_inst_id), event_queue)
-                if handled:
-                    return
+            # if extras.get("summarized_feedback", "") == "":
+            #     # 결정론적 코드 실행: 성공 시 이벤트 발행 후 조기 종료
+            #     handled = await self._run_deterministic(str(tenant_id), str(task_id), str(proc_inst_id), event_queue)
+            #     if handled:
+            #         return
 
             # CrewAI 실행
             logger.info("\n\n🤖 CrewAI Action 크루 생성 및 실행")
