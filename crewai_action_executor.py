@@ -221,7 +221,9 @@ class CrewAIActionExecutor(AgentExecutor):
                 form_html=extras.get("form_html", ""),
                 current_activity_name=extras.get("activity_name", ""),
                 feedback_summary=extras.get("summarized_feedback", ""),
-                tenant_mcp=extras.get("tenant_mcp")
+                tenant_mcp=extras.get("tenant_mcp"),
+                sources=extras.get("sources", []),
+                tenant_id=tenant_id
             )
             
             # 크루 실행

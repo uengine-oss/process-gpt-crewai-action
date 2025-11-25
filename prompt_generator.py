@@ -26,6 +26,7 @@ class DynamicPromptGenerator:
         feedback_summary: str = "",
         current_activity_name: str = "",
         user_info: Optional[List[Dict]] = None,
+        sources: List[Dict] | None = None,
     ) -> Tuple[str, str]:
         """두 LLM 호출로 설명/결과물을 분리 생성하고 asyncio.gather로 병렬 실행."""
 
@@ -163,6 +164,17 @@ class DynamicPromptGenerator:
         user_info_json = json.dumps(user_info or [], ensure_ascii=False, indent=2) if user_info else '정보 없음'
         learned_json = json.dumps(learned_knowledge or {}, ensure_ascii=False, indent=2) if has_learned else '관련 경험 없음'
         dmn_json = json.dumps(dmn_analysis or {}, ensure_ascii=False, indent=2) if has_dmn else '관련 규칙 분석 없음'
+        
+        # agent_info에서 실제 agent_id와 tenant_id 추출
+        agent_context_info = []
+        if agent_info:
+            for ag in agent_info:
+                agent_id = ag.get("id") or ag.get("user_id")
+                tenant_id = ag.get("tenant_id")
+                if agent_id and tenant_id:
+                    agent_context_info.append(f"agent_id={agent_id}, tenant_id={tenant_id}")
+        
+        agent_context_text = "\n".join([f"- {info}" for info in agent_context_info]) if agent_context_info else "없음"
         
         # form_types에서 필드 타입 확인
         has_slide_type = False
@@ -348,6 +360,11 @@ class DynamicPromptGenerator:
 - 실행형 도구가 의존성·환경 오류를 보고하면 즉시 'run_shell' 등 환경 설정 도구로 필요한 패키지 설치·설정을 수행하고, 동일 작업을 재시도하여 성공 여부를 확인
 - 특정 도구 사용이 실패하거나 제한되는 경우, 동일 목표를 달성할 수 있는 다른 도구/스킬을 즉시 탐색하여 대체 실행
 - 대체 도구 사용 시에도 결과 데이터의 완전성과 일관성을 유지하며, 필요 시 복수 도구를 연계 사용
+- **도구 파라미터 사용 규칙:**
+  * 도구 호출 시 agent_id나 tenant_id 파라미터가 필요한 경우, 반드시 아래의 실제 값을 사용해야 함
+  * 절대로 임의의 값이나 동적으로 생성한 값을 사용하지 말 것
+  * 실제 agent_id와 tenant_id 값:
+{agent_context_text}
 
 **콘텐츠 생성 시 주의사항:**
 - 모든 가용 도구를 적극 활용하여 정보 수집:
