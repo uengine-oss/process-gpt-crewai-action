@@ -18,6 +18,196 @@ logger = logging.getLogger(__name__)
 class CrewAIActionExecutor(AgentExecutor):
     """CrewAI 실행기 - context에서 데이터 추출 후 CrewAI 실행"""
 
+    def _detect_report_slide_fields(self, form_types) -> list:
+        """form_types에서 리포트/슬라이드 타입 필드를 감지하여 반환"""
+        report_slide_fields = []
+        if not form_types:
+            return report_slide_fields
+        
+        form_fields = None
+        if isinstance(form_types, dict) and ("fields" in form_types or "html" in form_types):
+            form_fields = form_types.get("fields")
+        else:
+            form_fields = form_types if form_types else None
+        
+        if form_fields and isinstance(form_fields, list):
+            for field in form_fields:
+                if isinstance(field, dict):
+                    field_type = field.get("type", "").lower()
+                    field_key = field.get("key", "")
+                    if field_type in ["report", "document", "slide", "presentation"] and field_key:
+                        report_slide_fields.append({
+                            "key": field_key,
+                            "type": field_type
+                        })
+        
+        return report_slide_fields
+    
+    def _publish_report_slide_events(
+        self, result, report_slide_fields: list, proc_inst_id: str, task_id: str, event_queue: EventQueue
+    ):
+        """리포트/슬라이드 타입 필드의 마크다운 내용을 추출하고 별도 이벤트로 발행"""
+        try:
+            # 결과 문자열 확보
+            result_text = getattr(result, "raw", None) or str(result)
+            
+            # 리포트/슬라이드 타입 필드의 마크다운 내용 추출
+            for field_info in report_slide_fields:
+                field_key = field_info["key"]
+                field_type = field_info["type"]
+                
+                # crew_type 결정: report 또는 slide
+                if field_type in ["report", "document"]:
+                    crew_type = "report"
+                elif field_type in ["slide", "presentation"]:
+                    crew_type = "slide"
+                else:
+                    crew_type = "report"  # 기본값
+                
+                # 결과에서 해당 필드의 마크다운 내용 찾기
+                # 여러 JSON 객체가 있을 수 있으므로 패턴 매칭으로 찾기
+                markdown_content = self._extract_markdown_from_result(result_text, field_key)
+                
+                if markdown_content:
+                    job_uuid = str(uuid.uuid4())
+                    logger.info(f"📤 {crew_type} 타입 이벤트 발행 시작 - 필드: {field_key}")
+                    
+                    # 시작 이벤트
+                    event_queue.enqueue_event(
+                        TaskStatusUpdateEvent(
+                            status={
+                                "state": TaskState.working,
+                                "message": new_agent_text_message(
+                                    json.dumps({
+                                        "role": f"{crew_type} 생성",
+                                        "name": f"{crew_type} 생성",
+                                        "goal": f"{field_key} {crew_type}를 생성합니다.",
+                                        "agent_profile": "/images/chat-icon.png"
+                                    }, ensure_ascii=False),
+                                    proc_inst_id,
+                                    task_id,
+                                ),
+                            },
+                            final=False,
+                            contextId=proc_inst_id,
+                            taskId=task_id,
+                            metadata={
+                                "crew_type": crew_type,
+                                "event_type": "task_started",
+                                "job_id": job_uuid,
+                            },
+                        )
+                    )
+                    
+                    # 완료 이벤트 (마크다운 내용 포함)
+                    event_queue.enqueue_event(
+                        TaskStatusUpdateEvent(
+                            status={
+                                "state": TaskState.completed,
+                                "message": new_agent_text_message(
+                                    json.dumps({field_key: markdown_content}, ensure_ascii=False),
+                                    proc_inst_id,
+                                    task_id,
+                                ),
+                            },
+                            final=False,
+                            contextId=proc_inst_id,
+                            taskId=task_id,
+                            metadata={
+                                "crew_type": crew_type,
+                                "event_type": "task_completed",
+                                "job_id": job_uuid,
+                            },
+                        )
+                    )
+                    
+                    logger.info(f"✅ {crew_type} 타입 이벤트 발행 완료 - 필드: {field_key}")
+                else:
+                    logger.warning(f"⚠️ {field_key} 필드의 마크다운 내용을 찾을 수 없습니다")
+        
+        except Exception as e:
+            logger.error(f"❌ 리포트/슬라이드 이벤트 발행 중 오류: {e}", exc_info=True)
+    
+    def _extract_markdown_from_result(self, result_text: str, field_key: str) -> str:
+        """결과 문자열에서 특정 필드의 마크다운 내용을 추출"""
+        try:
+            import re
+            import ast
+            
+            # 1. 먼저 전체 텍스트에서 JSON 객체 패턴 찾기
+            # 여러 JSON 객체가 있을 수 있으므로 각각 시도
+            json_pattern = r'\{[^{}]*"' + re.escape(field_key) + r'"[^{}]*\}'
+            matches = re.finditer(json_pattern, result_text, re.DOTALL)
+            
+            for match in matches:
+                json_str = match.group(0)
+                try:
+                    # JSON 파싱 시도
+                    obj = json.loads(json_str)
+                    if isinstance(obj, dict) and field_key in obj:
+                        content = obj[field_key]
+                        if isinstance(content, str):
+                            return content
+                except:
+                    # JSON 파싱 실패 시 Python 리터럴 시도
+                    try:
+                        obj = ast.literal_eval(json_str)
+                        if isinstance(obj, dict) and field_key in obj:
+                            content = obj[field_key]
+                            if isinstance(content, str):
+                                return content
+                    except:
+                        continue
+            
+            # 2. 백틱으로 감싸진 경우 처리
+            backtick_pattern = rf'\{{["\']?{re.escape(field_key)}["\']?\s*:\s*`([^`]+)`'
+            match = re.search(backtick_pattern, result_text, re.DOTALL)
+            if match:
+                return match.group(1)
+            
+            # 3. 따옴표로 감싸진 경우 처리 (멀티라인 포함)
+            # JSON 문자열 이스케이프 처리
+            quoted_pattern = rf'\{{["\']?{re.escape(field_key)}["\']?\s*:\s*"((?:[^"\\]|\\.)*)"'
+            match = re.search(quoted_pattern, result_text, re.DOTALL)
+            if match:
+                content = match.group(1)
+                # JSON 이스케이프 해제
+                try:
+                    return json.loads(f'"{content}"')
+                except:
+                    return content.replace('\\n', '\n').replace('\\"', '"')
+            
+            # 4. 각 줄을 개별적으로 파싱 시도
+            lines = result_text.split('\n')
+            for i, line in enumerate(lines):
+                line = line.strip()
+                if not line or not line.startswith('{'):
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict) and field_key in obj:
+                        content = obj[field_key]
+                        if isinstance(content, str):
+                            return content
+                except:
+                    # 여러 줄에 걸친 JSON 시도
+                    if i + 1 < len(lines):
+                        multi_line = '\n'.join(lines[i:i+10])  # 최대 10줄까지
+                        try:
+                            obj = json.loads(multi_line)
+                            if isinstance(obj, dict) and field_key in obj:
+                                content = obj[field_key]
+                                if isinstance(content, str):
+                                    return content
+                        except:
+                            continue
+            
+            return None
+        
+        except Exception as e:
+            logger.error(f"❌ 마크다운 추출 중 오류: {e}", exc_info=True)
+            return None
+
     def _generate_deterministic(self, tenant_id: str, task_id: str) -> bool:
         """Deterministic 코드 생성만 수행. 실패해도 예외를 전파하지 않는다.
         Returns True on success, False on failure.
@@ -234,6 +424,14 @@ class CrewAIActionExecutor(AgentExecutor):
             pure_form_data, wrapped_result, original_wo_form = convert_crew_output(result, form_id)
             job_uuid = str(uuid.uuid4())
             logger.info("\n\n📤 최종 결과 이벤트 발송")
+            
+            # 리포트/슬라이드 타입 필드 감지 및 별도 이벤트 발행
+            form_types = extras.get("form_fields")
+            report_slide_fields = self._detect_report_slide_fields(form_types)
+            if report_slide_fields:
+                self._publish_report_slide_events(
+                    result, report_slide_fields, proc_inst_id, task_id, event_queue
+                )
             
             if pure_form_data and pure_form_data != {}:
                 event_queue.enqueue_event(
