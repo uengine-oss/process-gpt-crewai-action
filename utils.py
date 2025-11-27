@@ -52,10 +52,14 @@ def _to_form_dict(form_data: Any) -> Dict[str, Any]:
         return {"content": form_data}
     return {}
 
-def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+def convert_crew_output(result, form_id: str = None, form_types: Dict = None) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
     CrewOutput/문자열 -> JSON 파싱 -> '폼_데이터'만 추출/정규화 -> form_id로 래핑
     + 원본 JSON에서 '폼_데이터' 키 제거한 사본도 함께 반환.
+    + 리포트/슬라이드 필드를 분리하여 별도로 반환.
+    
+    Returns:
+        Tuple[pure_form_data, wrapped_form_data, original_wo_form, report_fields, slide_fields]
     """
     try:
         # 1) 문자열 확보
@@ -66,19 +70,82 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
 
         # 일부 모델/도구는 결과를 최상위가 아닌 'result' 키 아래에 감싸서 반환한다.
         # 이 경우 실제 유의미한 페이로드는 output_val['result'] 이므로 이를 기준으로 처리한다.
+        result_data = None
         if isinstance(output_val, dict) and isinstance(output_val.get("result"), dict):
-            output_val = {
-                "폼_데이터": output_val["result"]
-            }
+            result_data = output_val["result"]
+            # result 안에 폼_데이터가 있으면 그대로 사용, 없으면 result 전체를 폼_데이터로 간주
+            if "폼_데이터" in result_data:
+                output_val = {
+                    "폼_데이터": result_data.get("폼_데이터"),
+                    **{k: v for k, v in result_data.items() if k != "폼_데이터"}
+                }
+            else:
+                output_val = {
+                    "폼_데이터": result_data
+                }
+        else:
+            result_data = output_val if isinstance(output_val, dict) else {}
 
         # dict가 아니면 원본 구조로는 의미 없으니 dict로 강제 사용 불가 → 빈 사본
         original_wo_form = dict(output_val) if isinstance(output_val, dict) else {}
 
+        # 리포트/슬라이드 필드 키 목록 추출 (form_types에서)
+        report_field_keys = []
+        slide_field_keys = []
+        if form_types:
+            form_fields = None
+            if isinstance(form_types, dict) and ("fields" in form_types or "html" in form_types):
+                form_fields = form_types.get("fields")
+            else:
+                form_fields = form_types if form_types else None
+            
+            if form_fields and isinstance(form_fields, list):
+                for field in form_fields:
+                    if isinstance(field, dict):
+                        field_type = field.get("type", "").lower()
+                        field_key = field.get("key", "")
+                        if field_key:
+                            if field_type in ["report", "document"]:
+                                report_field_keys.append(field_key)
+                            elif field_type in ["slide", "presentation"]:
+                                slide_field_keys.append(field_key)
+
         # 4) 폼_데이터 추출/정규화
         form_raw = output_val.get("폼_데이터") if isinstance(output_val, dict) else None
         pure_form_data = _to_form_dict(form_raw)
+        
+        # 리포트/슬라이드 필드 분리 (form_types 기반으로만 처리)
+        report_fields = {}
+        slide_fields = {}
+        
+        # result_data에서 리포트/슬라이드 필드 추출 (result 객체 내부에 있을 수 있음)
+        if isinstance(result_data, dict):
+            for key, value in result_data.items():
+                if key == "폼_데이터" or key == "상태" or key == "수행한_작업":
+                    continue
+                # form_types에서 정의된 리포트 필드인지 확인
+                if key in report_field_keys:
+                    report_fields[key] = value
+                # form_types에서 정의된 슬라이드 필드인지 확인
+                elif key in slide_field_keys:
+                    slide_fields[key] = value
+        
+        # 폼_데이터에서도 리포트/슬라이드 필드 제거 (프롬프트에서 별도 반환하도록 지시했으므로)
+        if isinstance(pure_form_data, dict):
+            for key in list(pure_form_data.keys()):
+                if key in report_field_keys or key in slide_field_keys:
+                    # 폼_데이터에 포함되어 있다면 별도 필드로 이동
+                    if key in report_field_keys and key not in report_fields:
+                        report_fields[key] = pure_form_data.pop(key, None)
+                    elif key in slide_field_keys and key not in slide_fields:
+                        slide_fields[key] = pure_form_data.pop(key, None)
+                    else:
+                        pure_form_data.pop(key, None)
+        
         pure_form_preview = str(pure_form_data)[:200] + ("..." if len(str(pure_form_data)) > 200 else "")
         logger.info(f"🔍 pure_form_data (처음 200자): {pure_form_preview}")
+        logger.info(f"🔍 리포트 필드: {list(report_fields.keys())}")
+        logger.info(f"🔍 슬라이드 필드: {list(slide_fields.keys())}")
 
         # 5) form_id 래핑 (요청사항: form_id로 {} 해서 dict 반환)
         wrapped_form_data = {form_id: pure_form_data} if form_id else pure_form_data
@@ -89,7 +156,7 @@ def convert_crew_output(result, form_id: str = None) -> Tuple[Dict[str, Any], Di
         if isinstance(original_wo_form, dict):
             original_wo_form.pop("폼_데이터", None)
 
-        return pure_form_data, wrapped_form_data, original_wo_form
+        return pure_form_data, wrapped_form_data, original_wo_form, report_fields, slide_fields
 
     except Exception as e:
         logger.error(f"❌ Crew 결과 변환 실패: {e}", exc_info=True)
