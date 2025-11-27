@@ -287,7 +287,7 @@ class CrewAIActionExecutor(AgentExecutor):
             # 리포트 필드 이벤트 발행
             for field_key, field_value in report_fields.items():
                 if field_value:  # 값이 있는 경우만 발행
-                    field_job_uuid = str(uuid.uuid4())
+                    field_job_uuid = str(f"final_report_merge_{field_key}")
                     logger.info(f"📄 리포트 필드 이벤트 발행: {field_key}")
                     
                     # working 상태 이벤트
