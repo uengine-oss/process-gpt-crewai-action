@@ -21,17 +21,58 @@ def _repair_backtick_value_literals(text: str) -> str:
         return f"{prefix}{escaped}"
     return _RE_BACKTICK_VALUE.sub(_repl, text)
 
+def _parse_multiple_json_objects(text: str) -> Dict[str, Any]:
+    """여러 JSON 객체가 줄바꿈으로 연결된 문자열을 파싱하여 병합."""
+    merged = {}
+    text = text.strip()
+    
+    # "}\n{" 또는 "}\r\n{" 패턴으로 분리
+    import re
+    # JSON 객체 경계 찾기: } 다음에 줄바꿈, 그 다음 {
+    pattern = r'\}\s*\n\s*\{'
+    parts = re.split(pattern, text)
+    
+    for i, part in enumerate(parts):
+        part = part.strip()
+        
+        # 첫 번째가 아니면 앞에 { 추가
+        if i > 0:
+            part = '{' + part
+        # 마지막이 아니면 뒤에 } 추가
+        if i < len(parts) - 1:
+            part = part + '}'
+        
+        # JSON 파싱 시도
+        try:
+            obj = json.loads(part)
+            if isinstance(obj, dict):
+                merged.update(obj)
+        except Exception as e:
+            # 파싱 실패 시 무시하고 계속
+            logger.warning(f"⚠️ JSON 객체 파싱 실패 (무시): {str(e)[:100]}")
+            continue
+    
+    return merged
+
 def _parse_json_guard(text: str) -> Any:
-    """문자열을 JSON으로 파싱."""
+    """문자열을 JSON으로 파싱. 여러 JSON 객체가 연결된 경우도 처리."""
     repaired = _repair_backtick_value_literals(text)
 
-    # 3) 우선 JSON으로 시도
+    # 1) 우선 JSON으로 시도
     try:
         return json.loads(repaired)
     except Exception:
         pass
 
-    # 4) JSON 실패 시, 파이썬 리터럴 파서로 보조 시도
+    # 2) 여러 JSON 객체가 줄바꿈으로 연결된 경우 처리
+    # "}\n{" 패턴이 있으면 여러 JSON 객체로 간주
+    if '}\n{' in repaired or '}\r\n{' in repaired:
+        try:
+            return _parse_multiple_json_objects(repaired)
+        except Exception:
+            pass
+
+    # 3) JSON 실패 시, 파이썬 리터럴 파서로 보조 시도
     try:
         return ast.literal_eval(repaired)
     except Exception as e:
@@ -71,18 +112,36 @@ def convert_crew_output(result, form_id: str = None, form_types: Dict = None) ->
         # 일부 모델/도구는 결과를 최상위가 아닌 'result' 키 아래에 감싸서 반환한다.
         # 이 경우 실제 유의미한 페이로드는 output_val['result'] 이므로 이를 기준으로 처리한다.
         result_data = None
-        if isinstance(output_val, dict) and isinstance(output_val.get("result"), dict):
-            result_data = output_val["result"]
-            # result 안에 폼_데이터가 있으면 그대로 사용, 없으면 result 전체를 폼_데이터로 간주
-            if "폼_데이터" in result_data:
-                output_val = {
-                    "폼_데이터": result_data.get("폼_데이터"),
-                    **{k: v for k, v in result_data.items() if k != "폼_데이터"}
-                }
+        if isinstance(output_val, dict) and "result" in output_val:
+            result_value = output_val["result"]
+            
+            # result 값이 문자열인 경우 (여러 JSON 객체가 연결된 형태일 수 있음)
+            if isinstance(result_value, str):
+                try:
+                    # 문자열을 JSON으로 파싱 시도
+                    result_data = _parse_json_guard(result_value)
+                    if not isinstance(result_data, dict):
+                        result_data = {}
+                except Exception as e:
+                    logger.warning(f"⚠️ result 문자열 파싱 실패, 빈 dict 사용: {e}")
+                    result_data = {}
+            elif isinstance(result_value, dict):
+                result_data = result_value
             else:
-                output_val = {
-                    "폼_데이터": result_data
-                }
+                result_data = {}
+            
+            # result_data가 dict인 경우 처리
+            if isinstance(result_data, dict):
+                # result 안에 폼_데이터가 있으면 그대로 사용, 없으면 result 전체를 폼_데이터로 간주
+                if "폼_데이터" in result_data:
+                    output_val = {
+                        "폼_데이터": result_data.get("폼_데이터"),
+                        **{k: v for k, v in result_data.items() if k != "폼_데이터"}
+                    }
+                else:
+                    output_val = {
+                        "폼_데이터": result_data
+                    }
         else:
             result_data = output_val if isinstance(output_val, dict) else {}
 
