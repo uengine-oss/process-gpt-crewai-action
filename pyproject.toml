@@ -1,0 +1,11 @@
+[project]
+name = "prcoess-gpt-crewai-action"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "jsonschema>=4.22.0",
+    "process-gpt-agent-sdk==0.4.11",
+    "process-gpt-agent-utils==0.2.5",
+]

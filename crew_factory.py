@@ -76,6 +76,7 @@ async def create_user_task(
     feedback_summary: str = "",
     agent_info: List[Dict] | None = None,
     user_info: List[Dict] | None = None,
+    sources: List[Dict] | None = None,
 ) -> Task:
     """사용자 요청을 바탕으로 동적 프롬프트 생성하여 단일 Task 생성"""
     try:
@@ -95,7 +96,8 @@ async def create_user_task(
             form_html=form_html,
             feedback_summary=feedback_summary,
             current_activity_name=current_activity_name,
-            user_info=user_info or []
+            user_info=user_info or [],
+            sources=sources or []
         )
         
         task = Task(
@@ -122,6 +124,8 @@ async def create_crew(
     feedback_summary: str = "",
     user_info: List[Dict] | None = None,
     tenant_mcp: Dict | None = None,
+    sources: List[Dict] | None = None,
+    tenant_id: str = "",
 ):
     """에이전트/태스크를 구성해 크루를 생성합니다."""
     try:
@@ -149,7 +153,7 @@ async def create_crew(
         for info in agent_info:
             try:
                 user_id = info.get('id') or info.get('user_id')
-                tenant_id = info.get('tenant_id')
+                tenant_id = info.get('tenant_id') or tenant_id
                 
                 tools_str = info.get('tools', '')
                 tool_names = [tool.strip() for tool in tools_str.split(',') if tool.strip()] if tools_str else []
@@ -211,7 +215,8 @@ async def create_crew(
             current_activity_name=current_activity_name,
             feedback_summary=feedback_summary,
             agent_info=agent_info,  # 원본 딕셔너리 리스트 전달
-            user_info=user_info
+            user_info=user_info,
+            sources=sources
         )
         logger.info("\n\n✅ 사용자 태스크 생성 완료")
         
