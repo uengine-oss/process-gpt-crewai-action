@@ -241,18 +241,16 @@ class CrewAIActionExecutor(AgentExecutor):
             
             logger.info(f"🔍 form_id: {form_id}, task_id: {task_id}, proc_inst_id: {proc_inst_id}")
             
-            # Context variables 초기화
-            # 🔄 초기 단계는 항상 planning으로 설정 (CrewAI Planning 단계)
-            # 이후 planning 결과(list_of_plans_per_task)가 감지되면 logger에서 action으로 전환
+            # Context variables 초기화 (항상 action으로 고정)
             set_context(
                 task_id=str(task_id) if task_id else "",
                 proc_inst_id=str(proc_inst_id) if proc_inst_id else "",
-                crew_type="planning",
+                crew_type="action",
                 users_email=extras.get("notify_user_emails", [])
             )
 
             logger.info(
-                f"🔧 Context variables 초기화 완료 - task_id: {task_id}, proc_inst_id: {proc_inst_id}, crew_type: planning"
+                f"🔧 Context variables 초기화 완료 - task_id: {task_id}, proc_inst_id: {proc_inst_id}, crew_type: action"
             )
 
             # if extras.get("summarized_feedback", "") == "":
