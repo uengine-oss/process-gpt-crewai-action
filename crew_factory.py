@@ -100,8 +100,19 @@ async def create_user_task(
             sources=sources or []
         )
         
+        # 플래닝에서 필요한 InputData 원본만 description 뒤에 덧붙인다 (Description/Instruction은 제외)
+        input_section = ""
+        if task_instructions:
+            marker = "[InputData]"
+            if marker in task_instructions:
+                input_section = task_instructions.split(marker, 1)[1].strip()
+        raw_input_appendix = (
+            "\n\n=== 입력 데이터 원본 (InputData) ===\n"
+            "- 아래 InputData 컨텍스트를 참고해 작업을 진행하세요.\n"
+            f"{input_section}\n\n"
+        ) if input_section else ""
         task = Task(
-            description=description,
+            description=f"{description}{raw_input_appendix}",
             expected_output=expected_output,
             agent=agent
         )

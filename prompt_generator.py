@@ -30,9 +30,6 @@ class DynamicPromptGenerator:
     ) -> Tuple[str, str]:
         """두 LLM 호출로 설명/결과물을 분리 생성하고 asyncio.gather로 병렬 실행."""
 
-        # task_instructions에서 [InputData] 섹션 추출
-        parsed_sections = self._parse_task_instructions(task_instructions)
-        
         learned_knowledge = self._collect_learned_knowledge(
             agent_info=agent_info,
             task_instructions=task_instructions,
@@ -47,7 +44,6 @@ class DynamicPromptGenerator:
         # 설명용 브리프: 폼 정보 제외
         desc_brief = self._build_description_prompt(
             task_instructions=task_instructions,
-            parsed_sections=parsed_sections,
             agent_info=agent_info,
             user_info=user_info or [],
             feedback_summary=feedback_summary,
@@ -98,52 +94,6 @@ class DynamicPromptGenerator:
     # ----------------------------
     # 내부 로직
     # ----------------------------
-    def _parse_task_instructions(self, task_instructions: str) -> Dict[str, str]:
-        """task_instructions를 [Description], [Instruction], [InputData] 섹션으로 분리"""
-        sections = {
-            "description": "",
-            "instruction": "",
-            "input_data": ""
-        }
-        
-        if not task_instructions:
-            return sections
-        
-        lines = task_instructions.strip().split('\n')
-        current_section = None
-        current_content = []
-        
-        for line in lines:
-            line_stripped = line.strip()
-            if line_stripped.startswith('[Description]'):
-                if current_section and current_content:
-                    sections[current_section] = '\n'.join(current_content).strip()
-                current_section = "description"
-                current_content = [line_stripped.replace('[Description]', '').strip()]
-            elif line_stripped.startswith('[Instruction]'):
-                if current_section and current_content:
-                    sections[current_section] = '\n'.join(current_content).strip()
-                current_section = "instruction"
-                current_content = [line_stripped.replace('[Instruction]', '').strip()]
-            elif line_stripped.startswith('[InputData]'):
-                if current_section and current_content:
-                    sections[current_section] = '\n'.join(current_content).strip()
-                current_section = "input_data"
-                current_content = [line_stripped.replace('[InputData]', '').strip()]
-            else:
-                if current_section:
-                    current_content.append(line)
-        
-        # 마지막 섹션 저장
-        if current_section and current_content:
-            sections[current_section] = '\n'.join(current_content).strip()
-        
-        # 섹션이 없으면 전체를 instruction으로 처리
-        if not any(sections.values()):
-            sections["instruction"] = task_instructions.strip()
-        
-        return sections
-    
     def _collect_learned_knowledge(
         self,
         agent_info: List[Dict],
@@ -180,7 +130,6 @@ class DynamicPromptGenerator:
     def _build_description_prompt(
         self,
         task_instructions: str,
-        parsed_sections: Dict[str, str],
         agent_info: List[Dict],
         user_info: List[Dict],
         feedback_summary: str,
@@ -294,105 +243,56 @@ class DynamicPromptGenerator:
    - DMN 규칙을 최우선으로 활용하여 규칙 기반 추론 수행하고, 일반 배경지식을 보조적으로 참고
    - DMN 규칙이 있으면 반드시 그 규칙을 기반으로 모든 추론과 결정을 수행"""
 
-        # 파싱된 섹션 추출
-        description_text = parsed_sections.get("description", "")
-        instruction_text = parsed_sections.get("instruction", "")
-        input_data_text = parsed_sections.get("input_data", "")
-        
-        # InputData 존재 여부 확인 (핵심 판단 기준)
-        has_input_data = bool(input_data_text and input_data_text.strip() and input_data_text.strip() != '{}')
-        has_instruction = bool(instruction_text and instruction_text.strip())
-
         return f"""
 다음 정보를 바탕으로 CrewAI Task description 프롬프트를 생성하세요:
 
-=== 📋 섹션 1: 작업 지침 (Description & Instruction) ===
-
-**작업 배경 설명 (Description):**
-- 값: {description_text or '명시되지 않음'}
-- 역할: 현재 작업의 배경과 목적 설명하는 **지침**
-- 활용: 작업의 맥락과 이유를 이해하기 위한 참고
-
-**작업 수행 지침 (Instruction):**
-- 값: {instruction_text or '명시되지 않음'}
-- 역할: 무엇을 어떻게 수행할지 알려주는 **구체적인 작업 지침**
-- 활용: 이 지침에 따라 작업을 수행 (단, 피드백이 있으면 피드백에 의해 재해석됨)
-- 🎯 **지침 존재 여부**: {('✅ 작업 지침 있음' if has_instruction else '❌ 작업 지침 없음')}
-
-=== 🔥 섹션 2: 실제 입력 데이터 (InputData - 컨텍스트) ===
-
-🎯 **데이터 존재 여부**: {('✅ 입력 데이터 있음' if has_input_data else '❌ 입력 데이터 없음')}
-
-{('**🔥 다음은 처리해야 할 실제 데이터입니다 (InputData):**\\n\\n```json\\n' + input_data_text + '\\n```\\n\\n- 역할: 위 지침(Instruction)을 이 데이터에 적용하여 작업 수행\\n- 🚨 **중요**: 이 데이터가 있으므로 도구 실패와 무관하게 **반드시 작업을 완료**해야 합니다\\n- 활용: 이 JSON 데이터를 파싱하여 필요한 정보를 추출하고 지침대로 처리' if has_input_data else '**❌ 입력 데이터 없음:**\\n- 역할: 작업을 수행하기 위한 실제 원본 데이터가 없음\\n- 활용: 도구를 사용하여 데이터를 수집해야 함')}
+=== 📋 섹션 1: 입력값 설명 ===
 
 **활동명 (current_activity_name):**
 - 값: {current_activity_name or '일반 작업'}
-- 역할: 현재 수행중인 업무 이름
-- 활용: 작업의 배경과 목적 이해에 참고
+- 역할: 현재 수행중인 업무 이름을 나타냄
+- 활용: 이름이 의미하는 작업의 배경과 목적 설명에 사용
 
 **팀 구성 (agent_info):**
 - 값: {agent_info_json}
-- 역할: 협업할 에이전트들의 역할, ID, 테넌트 정보
-- 활용: 각 에이전트의 전문성을 고려한 작업 분배 및 협업 지시
+- 역할: 협업할 에이전트들의 역할, ID, 테넌트 정보 제공
+- 활용: 각 에이전트의 전문성을 고려한 작업 분배 및 협업 지시에 사용
 
-**담당자 (user_info):**
+**담당자(Owner) (user_info):**
 - 값: {user_info_json}
-- 역할: 현재 업무의 실제 담당자 정보
-- 활용: 결과물에 담당자/참가자 정보가 요구되면 반영
+- 역할: 현재 업무의 실제 담당자 정보(담당자 표기, 연락/검토 지점 반영)
+- 활용: 결과물에 담당자/참가자 정보가 요구되면 적절히 반영
 
-**소스 파일 (sources):**
-- 값: {sources_json}
-- 역할: 작업 수행에 필요한 소스 파일 정보 (추가 컨텍스트)
-- 활용: file_path 필드를 통해 파일 내용 참고, InputData가 없을 때 대체 데이터 소스로 활용
+**작업 지시사항 (task_instructions):**
+- 값: {task_instructions or '명시되지 않음'}
+- 역할: 기본적으로 수행해야 할 핵심 업무 내용과 지침 및 이전 결과물들에 대한 정리본
+- 활용: Task의 주요 목표와 수행 방법의 기준점 (단, 피드백이 있으면 피드백에 의해 재해석됨)
 
 **학습된 경험 (learned_knowledge):**
 - 값: {learned_json}
-- 역할: 에이전트별 관련 업무 경험과 노하우 (추가 컨텍스트)
-- 활용: 작업 품질 향상, InputData가 없을 때 참고 자료로 활용
-{('- 참고: 현재 수행할 작업을 더 완벽하게 수행하기 위한 디테일 보완에 활용' if has_learned else '')}
+- 역할: 에이전트별 관련 업무 경험과 노하우 제공
+- 활용: 작업 품질 향상과 실수 방지를 위한 참고 자료
+{('- 참고: 현재 수행할 작업을 더 완벽하게 수행하기 위한 디테일 보완에 활용' if has_learned else '- 참고: 학습 자료 부족 시에도 작업 중단 금지, 일반 지식으로 초안 작성')}
 
 **DMN 규칙 분석 (dmn_rule):**
 - 값: {dmn_json}
-- 역할: 규칙 기반 추론 결과 (학습된 경험보다 우선)
-- 활용: 지침 해석 및 작업 도출 시 규칙으로 추론된 결과를 최우선 반영
+- 역할: 규칙을 기반으로 추론된 답변 제공(학습된 경험보다 우선 반영)
+- 활용: 작업지시사항 해석 및 원자 작업 도출 시 규칙으로 추론된 결과를 최우선으로 반영
 
 **피드백 (feedback_summary):**
 - 값: {feedback_summary if has_feedback else '없음'}
 - 역할: 이전 작업에 대한 수정 요구사항 (최고 우선순위)
-- 활용: 모든 다른 지시사항보다 우선하여 작업 방향과 방법 결정
+- 활용: 모든 다른 지시사항보다 우선하여 작업 방향과 방법을 결정
 {f'- 🔥 최우선: 피드백이 있으면 모든 작업은 이 피드백 내용에 따라 재정의됨' if has_feedback else ''}
-- 처리방식: 피드백 동사(저장/수정/삭제/조회 등)가 있으면 그에 맞게 지침 재해석
-- 충돌해결: 피드백 vs 지침 충돌 시 → 무조건 피드백 우선
+- 처리방식: 피드백 동사(저장/수정/삭제/조회 등..)가 있으면 그에 맞게 작업지시사항 재해석
+- 충돌해결: 피드백 vs 작업지시사항 충돌 시 → 무조건 피드백 우선 적용
 
-=== 🎯 섹션 3: 작업 실행 가능 여부 판단 기준 (중요!) ===
+**소스 파일 (sources):**
+- 값: {sources_json}
+- 역할: 작업 수행에 필요한 소스 파일 정보 제공
+- 활용: 소스 파일을 참고하여 작업 수행, file_path 필드를 통해 파일 경로에 접근하여 파일 내용을 참고
 
-🚨 **핵심 원칙: 지침(Instruction)을 수행할 데이터가 있는지 확인!**
-
-**작업 실행 가능 판단 3단계:**
-1. **지침 확인**: Instruction(작업 지침)이 있는가? → {('✅ 있음' if has_instruction else '❌ 없음')}
-2. **데이터 확인**: InputData(실제 데이터 컨텍스트)가 있는가? → {('✅ 있음' if has_input_data else '❌ 없음')}
-3. **대체 수단 확인**: InputData가 없으면 도구로 데이터 수집 가능한가?
-
-**시나리오별 작업 수행 방법:**
-{('✅ **[현재 상태] 지침 있음 + 데이터 있음**: 최상의 상황!\\n- InputData를 지침(Instruction)대로 처리하여 작업 완료\\n- 도구 실패/파일 없음 등 무관 → InputData만으로 작업 완료\\n- 🔥 **절대 규칙**: "입력 없음"으로 실패 처리 절대 금지!' if (has_instruction and has_input_data) else '')}
-{('⚠️ **[현재 상태] 지침 있음 + 데이터 없음**: 도구로 데이터 수집 시도!\\n- sources, learned_knowledge, dmn_analysis 등 다른 컨텍스트 확인\\n- 도구(perplexity, supabase, gmail-mcp 등)로 데이터 수집 시도\\n- 수집 성공 → 지침대로 작업 수행\\n- **모든 도구 실패 + 다른 컨텍스트도 없음** → FAILED 처리 (무엇을 처리할 데이터가 없음)' if (has_instruction and not has_input_data) else '')}
-{('❌ **[현재 상태] 지침 없음**: 무엇을 해야 할지 모름\\n- 데이터 유무와 무관하게 작업 불가 → FAILED 처리' if not has_instruction else '')}
-
-**SUCCESS vs FAILED 판단 기준:**
-- ✅ **SUCCESS 조건**:
-  * 지침(Instruction) 있음 + InputData 있음 → 무조건 SUCCESS
-  * 지침(Instruction) 있음 + InputData 없음 + 도구로 데이터 수집 성공 → SUCCESS
-  * 지침(Instruction) 있음 + InputData 없음 + sources/learned_knowledge 등 다른 컨텍스트 있음 → SUCCESS
-
-- ❌ **FAILED 조건**:
-  * 지침(Instruction) 없음 → FAILED
-  * 지침(Instruction) 있음 + InputData 없음 + 모든 도구 실패 + 다른 컨텍스트도 없음 → FAILED
-
-🔥 **핵심 요약**: 
-- "무엇을 할지(지침)"는 있는데 "무엇을 처리할지(데이터)"가 없고 도구로도 못 구하면 → FAILED
-- "무엇을 처리할지(데이터)"가 있으면 → 도구 실패 무관하게 무조건 SUCCESS
-
-=== 🎯 섹션 5: 작업 범위 및 우선순위 ===
+=== 🎯 섹션 2: 작업 범위 및 방향 ===
 
 **우선순위 체계:**
 {first_priority_text}
@@ -400,28 +300,27 @@ class DynamicPromptGenerator:
 {second_priority_text}
 
 **작업 범위 제한 원칙:**
-- 오직 지침(Instruction)과 피드백에 명시된 작업만 수행
+- 오로지지 작업 지시사항과 피드백만의 작업 방향을 결정
 - 명시된 작업만 수행, 비명시 연관작업/후속작업 절대 금지
 - 예시 1: "휴가 정보 저장" → 오직 휴가정보만 저장, 휴가잔여일수 수정/알림발송/승인처리 등 금지
 - 예시 2: "주문 정보 저장" → 오직 주문정보만 저장, 재고감소/포인트적립/알림발송 등 금지
 - 예시 3: "사용자 정보 수정" → 명시된 사용자의 명시된 필드만 수정, 다른 사용자/필드 수정 금지
 
 **다중 작업 처리 원칙:**
-- 반드시 지침(Instruction)에서 실행 동사를 기준으로 원자 작업을 모두 추출하여 목록화(예: 저장, 확인, 조회 등)
+- 반드시 작업지시사항에서 실행 동사를 기준으로 원자 작업을 모두 추출하여 목록화(예: 저장, 확인, 조회 등)
 - 모든 원자 작업을 반드시 수행해야 함 
-- 즉, 지침에 여러 작업이 있을 경우 해당 작업을 모두 수행해야 함
+- 즉, 작업지시에 여러 작업이 있을 경우 해당 작업을 모두 수행해야 함
 - 작업 간 선후관계/의존성을 파악하여 올바른 순서로 실행
 
-=== 💾 섹션 6: 데이터 처리 시 정확성 보장 ===
+=== 💾 섹션 3: 데이터 쓰기/수정 시 정확성 보장 ===
 
 **데이터 완전성 확보 절차:**
-1. **InputData(컨텍스트) 최우선 확인**: InputData에 있는 모든 정보를 먼저 추출
-2. **부족한 데이터 보완**: sources, learned_knowledge 등 다른 컨텍스트 확인
-3. **도구로 추가 수집**: 읽기전용 도구로 조회/검증/보완 (SELECT 쿼리, 검색 API 등)
-4. **완전한 데이터 확보 후 쓰기**: 모든 필요 데이터가 완전해진 후에만 쓰기 작업 수행
-5. **누락 방지**: 데이터를 저장/수정할 경우, 도구를 적극 활용해서 완전한 데이터 생성, 절대 누락 금지
+1. 작업 지시사항에서 필요한 모든 데이터 파악
+2. 부족한 데이터는 읽기전용 도구로 조회/검증/보완 (SELECT 쿼리, 검색 API, 메시징 API 등)
+3. 모든 필요 데이터가 완전해진 후에만 쓰기 작업 수행
+4. 데이터를 저장 및 수정할 경우, 주어진 값을 최대한 활용해서 다른 테이블의 값을 조회하는 등, 툴을 적극 활용해서 완전한 데이터를 생성 및 수정해야 함, 절대 누락되는 컬럼이나 데이터가 있어서는 안됩니다.
 
-=== 🎨 섹션 7: 콘텐츠 생성 시 가이드라인 ===
+=== 🎨 섹션 4: 콘텐츠 생성 시 가이드라인 ===
 
 **폼 형식별 창의적 콘텐츠 생성 원칙:**
 
@@ -455,64 +354,49 @@ class DynamicPromptGenerator:
 - 작업 지시사항이 이미 구체적이고 상세한 경우에는 그대로 반영하되, 누락된 실행 단계가 있다면 보완하세요
 
 **도구 활용 기본 원칙:**
-- 제공된 도구와 스킬은 가능한 한 광범위하게 모두 활용하여 정보 수집과 작업 수행 정확도 향상
-- 실행형 도구가 의존성·환경 오류를 보고하면 즉시 'run_shell' 등으로 필요한 패키지 설치 후 재시도
-- 특정 도구 실패 시, 동일 목표를 달성할 수 있는 다른 도구를 즉시 탐색하여 대체 실행
-- 대체 도구 사용 시에도 결과 데이터의 완전성과 일관성 유지
+- 제공된 도구와 스킬은 가능한 한 광범위하게 모두 활용하여 정보 수집과 작업 수행 정확도를 높일 것
+- 실행형 도구가 의존성·환경 오류를 보고하면 즉시 'run_shell' 등 환경 설정 도구로 필요한 패키지 설치·설정을 수행하고, 동일 작업을 재시도하여 성공 여부를 확인
+- 특정 도구 사용이 실패하거나 제한되는 경우, 동일 목표를 달성할 수 있는 다른 도구/스킬을 즉시 탐색하여 대체 실행
+- 대체 도구 사용 시에도 결과 데이터의 완전성과 일관성을 유지하며, 필요 시 복수 도구를 연계 사용
 - **🚨 도구 실패 시 처리 (핵심 규칙):**
-  * 🔥 **최우선 원칙: InputData(컨텍스트)가 있으면 도구 실패와 무관하게 무조건 작업 완료**
   * 도구는 보조 수단일 뿐, 도구 실패 ≠ 작업 실패
-  * 파일이 없어도, URL이 깨져도, 도구가 오류를 반환해도 → **InputData가 있으면 그것으로 작업 계속**
-  * 모든 도구(perplexity, supabase, gmail-mcp, mcp-python-interpreter, mem0, memento, dmn_rule 등)가 실패해도 → **InputData + 배경지식으로 작업 완료**
+  * 파일이 없어도, URL이 깨져도, 도구가 오류를 반환해도 → 입력 텍스트(파일 내용용,작업지시사항, InputData 등)가 있으면 그것으로 작업 계속
+  * 모든 도구(perplexity, supabase, gmail-mcp, mcp-python-interpreter, mem0, memento, dmn_rule 등)가 실패해도 → 입력 컨텍스트 + 배경지식으로 작업 완료
   * list_directory "No files found", dmn_rule "규칙 없음", mem0 "지식 없음" 등 빈 결과도 실패 사유 아님
-  * 🚨 **FAILED 처리 조건**: 지침(Instruction) 있음 + InputData 없음 + 모든 도구 실패 + 다른 컨텍스트도 없음 → FAILED
+  * 오직 입력 컨텍스트(텍스트/데이터)가 전혀 없을 때만 FAILED 처리하고 부족한 정보 명시
 - **도구 파라미터 사용 규칙:**
   * 도구 호출 시 agent_id나 tenant_id 파라미터가 필요한 경우, 반드시 아래의 실제 값을 사용해야 함
   * 절대로 임의의 값이나 동적으로 생성한 값을 사용하지 말 것
   * 실제 agent_id와 tenant_id 값:
 {agent_context_text}
 
-**작업 수행 프로세스 (3단계):**
-1. **컨텍스트 확인**:
-   * InputData(실제 데이터 컨텍스트) 최우선 확인 및 추출
-   * sources, learned_knowledge, dmn_analysis 등 다른 컨텍스트 확인
-   * 🎯 **컨텍스트 있으면 → 2단계로 진행 (작업 가능)**
-   * ⚠️ **컨텍스트 없으면 → 도구로 데이터 수집 시도**
-
-2. **도구로 정보 보완** (선택적):
-   * 가용 도구들(perplexity, supabase, gmail-mcp, mcp-python-interpreter, mem0, memento, dmn_rule 등)로 추가 정보 수집
-   * human_asked 툴은 보안 관련 이슈가 있을 때만 각 질문당 한 번만 사용
-   * 도구 실패/빈 결과는 무시 (1단계 컨텍스트가 있으면 문제없음)
-   * list_directory "No files", mem0 "지식 없음" 등은 실패 사유 아님
-
-3. **작업 완료**:
-   * 1단계 컨텍스트(InputData 등) + 2단계 도구 결과 + 배경지식으로 작업 수행
-   * 도구 전부 실패해도 → 컨텍스트가 있으면 그것으로 작업 완료
+**콘텐츠 생성 시 주의사항:**
+- 모든 가용 도구를 적극 활용하여 정보 수집하되, 도구 실패 시에도 작업 계속:
+  * human_asked 툴은 반드시 딱 각 질문당 한번만 사용하며, 중복 호출 금지 오로직 보안관련 이슈가 있을 때만 사용하세요
+  * 1단계: 입력 컨텍스트(rfp_file_content, task_instructions, InputData 등) 확인 및 추출
+  * 2단계: 가용 도구들(perplexity, supabase, gmail-mcp, mcp-python-interpreter, mem0, memento, dmn_rule 등)로 추가 정보 수집 시도
+  * 3단계: 도구 결과가 실패/없음/오류여도 → 1단계 컨텍스트 + 배경지식으로 작성 계속
+  * 🚨 핵심: 도구는 선택, 컨텍스트는 필수 → 도구 없이도 컨텍스트만으로 완료 가능
+  * 메모리 도구(mem0, memento) 결과 없음 → 작업 중단 금지, 일반 지식 활용
+  * DB 조회(supabase) 실패/빈 결과 → 작업지시사항 데이터 활용
+  * 파일 도구(list_directory) "No files" → 입력 텍스트 데이터 활용
   * 파일 생성 작업 시 upload_file 등으로 URL 제공, 실패 시에도 내용은 반드시 작성
   * 폼 요구사항과 작업 맥락에 맞는 적절한 내용 생성 (도구 성공 여부 무관)
 
 === 📤 프롬프트 생성 최종 지침 ===
 
-**작업 수행 체크리스트:**
-1. ✅ 지침(Instruction) 확인: 무엇을 해야 하는지 명확한가?
-2. ✅ 컨텍스트(InputData) 확인: 처리할 데이터가 있는가?
-3. ✅ 컨텍스트 있음 → 지침대로 작업 수행
-4. ⚠️ 컨텍스트 없음 → 도구로 데이터 수집 시도
-5. ❌ 컨텍스트 없음 + 도구 전부 실패 → FAILED (무엇을 처리할 데이터 없음)
-
-**달성 목표 (지침 범위 내에서만):**
-- 지침(Instruction)에 명시된 작업을 컨텍스트(InputData)에 적용하여 완수
-- 구체적으로 무엇을 완성해야 하는지, 어떤 품질과 기준을 만족해야 하는지 파악
+**달성 목표 (작업지시사항 범위 내에서만):**
+- 구체적으로 무엇을 완성해야 하는지
+- 어떤 품질과 기준을 만족해야 하는지
+- 특별히 주의해야 할 요구사항이 있는지
 - 범위를 벗어난 작업은 절대 수행하지 않을 것
-- 데이터 처리 시 완전성과 정확성 보장
+- 데이터 처리 시 완전성과 정확성을 보장할 것
 
 **성공 기준:**
-{('✅ **InputData 있음**: 도구 실패 무관하게 반드시 작업 완료 가능' if has_input_data else '⚠️ **InputData 없음**: 도구로 데이터 수집 필요 (실패 시 FAILED)')}
-- 명시된 목표들이 전부 달성되어야 함 (일부만 달성하면 실패)
+- 명시된 목표들이 전부 달성되어야 함 (일부만 달성하면 실패이며, 실패 시 반드시 사유를 디테일하게 명시)
 {('- 피드백 내용을 100% 반영하여 처리' if has_feedback else '')}
 - 요구된 형식으로 결과 제공
 - 작업 범위 엄수 확인
-{('- 🔥 **절대 금지**: InputData가 있는데 "데이터 없음"으로 실패 처리 절대 금지!' if has_input_data else '- ⚠️ **FAILED 가능**: InputData 없고 도구로도 데이터 수집 실패 시 FAILED 처리 가능')}
 """
 
     def _build_expected_output_prompt(
@@ -589,7 +473,12 @@ class DynamicPromptGenerator:
             f"- 값(HTML): {form_html_text if form_html_text else '없음'}\n"
             "- 역할: 최종 결과물의 구조와 필드 정의, 선택형 항목(items) 제공\n"
             "- 활용: expected_output 구조 설계와 폼_데이터 키/값 결정에 사용\n"
-            f"{('- 주의: key 값을 변경 없이 정확히 필드명으로 사용해야 함' if has_form_types else '')}\n"
+            "- 🚨🚨🚨 절대 규칙: 폼_데이터의 키는 반드시 form_fields의 'key' 값을 사용 (절대 'text' 값 사용 금지!)\n"
+            "- 예시: form_fields에 {\"key\": \"inquiry_type\", \"text\": \"문의 유형\"}이 있다면\n"
+            "  ✅ 올바름: {\"폼_데이터\": {\"inquiry_type\": \"값\"}}\n"
+            "  ❌ 절대 금지: {\"폼_데이터\": {\"문의 유형\": \"값\"}} (text 값 사용)\n"
+            "  ❌ 절대 금지: {\"폼_데이터\": {\"문의유형\": \"값\"}} (임의 생성)\n"
+            "  ❌ 절대 금지: {\"폼_데이터\": {\"CS_내용\": \"값\", \"분류_결과\": \"값\"}} (form_fields에 없는 키)\n"
             f"{multidata_notice}"
             "섹션 2) 선택형(radio/select) 처리\n"
             "- form_fields의 type이 'radio' 또는 'select'인 경우, 값 목록은 form_types의 HTML에서 추출\n"
@@ -604,16 +493,22 @@ class DynamicPromptGenerator:
             "- 반드시 JSON 객체(object)로만 작성하세요. 문자열 포장/백틱/코드블록 금지\n"
             "- 아래 예시는 구조 예시이며, 값은 반드시 실제 작업 결과로 채워야 합니다\n\n"
             "[일반 모드 예시 (is_multidata_mode=\"false\" 또는 없음)]\n"
-            "{\n  \"상태\": \"SUCCESS\" 또는 \"FAILED\",\n  \"수행한_작업\": \"읽기 좋은 자연어 텍스트로 수행 내역을 문단/불릿 형태로 서술\",\n  \"폼_데이터\": {\n    // 폼타입에 맞는 실제 데이터 (반드시 key 값을 필드명으로 사용)\n    form_key : 실제 데이터 값\n  }\n}\n\n"
+            "{\n  \"상태\": \"SUCCESS\" 또는 \"FAILED\",\n  \"수행한_작업\": \"읽기 좋은 자연어 텍스트로 수행 내역을 문단/불릿 형태로 서술\",\n  \"폼_데이터\": {\n    \"field_key_1\": \"실제 데이터 값\",  // form_fields의 첫 번째 필드 key\n    \"field_key_2\": \"실제 데이터 값\"   // form_fields의 두 번째 필드 key\n  }\n}\n"
+            "🚨 중요: field_key_1, field_key_2는 예시입니다. 반드시 위 form_fields의 실제 'key' 값으로 교체하세요!\n\n"
             "[다중 데이터 모드 예시 (is_multidata_mode=\"true\")]\n"
-            "{\n  \"상태\": \"SUCCESS\" 또는 \"FAILED\", \n  \"수행한_작업\": \"읽기 좋은 자연어 텍스트로 수행 내역을 문단/불릿 형태로 서술\",\n  \"폼_데이터\": {\n    // 일반 필드\n    normal_field : 실제 데이터 값,\n    // 다중 데이터 모드 필드는 배열 형태로 반환 (HTML의 실제 name 속성 사용 임의로 생성 금지)\n    real_multidata_field_name : [\n      {\n        \"property1\": \"실제 속성 값\",\n        \"property2\": \"실제 속성 값\",\n        \"property3\": \"실제 속성 값\"\n      },\n      {\n        \"property1\": \"실제 속성 값2\",\n        \"property2\": \"실제 속성 값2\",\n        \"property3\": \"실제 속성 값2\",\n      }\n    ]\n  }\n}\n\n"
+            "{\n  \"상태\": \"SUCCESS\" 또는 \"FAILED\", \n  \"수행한_작업\": \"읽기 좋은 자연어 텍스트로 수행 내역을 문단/불릿 형태로 서술\",\n  \"폼_데이터\": {\n    \"normal_field_key\": \"실제 데이터 값\",  // form_fields의 일반 필드 key\n    \"multidata_field_key\": [  // form_fields의 다중 데이터 필드 key\n      {\n        \"property_key_1\": \"실제 속성 값\",  // HTML name 속성의 실제 key\n        \"property_key_2\": \"실제 속성 값\"\n      },\n      {\n        \"property_key_1\": \"실제 속성 값2\",\n        \"property_key_2\": \"실제 속성 값2\"\n      }\n    ]\n  }\n}\n"
+            "🚨 중요: normal_field_key, multidata_field_key, property_key_1 등은 모두 예시입니다.\n"
+            "반드시 form_fields의 실제 'key' 값으로 교체하세요!\n\n"
             "- 위 구조는 예시입니다. 예시 값을 그대로 사용하지 말고 실제 결과로 대체하세요\n"
-            "- 폼_데이터 키 규칙: 폼타입의 'key' 값을 변경 없이 원본 그대로 정확히 필드명으로 사용\n"
-            "- 폼_데이터에는 요구된 폼타입 필드들이 정확히 포함되어야 함\n"
+            "- 🚨🚨🚨 폼_데이터 키 규칙 (최우선 규칙):\n"
+            "  * 반드시 form_fields의 'key' 값을 변경 없이 원본 그대로 정확히 필드명으로 사용\n"
+            "  * 절대 'text' 값을 키로 사용하지 말 것 (예: \"문의 유형\", \"검토 결과\" 등 한글 키 금지)\n"
+            "  * 절대 임의의 키를 생성하지 말 것 (예: \"CS_내용\", \"분류_결과\" 등 form_fields에 없는 키 금지)\n"
+            "  * form_fields에 정의된 모든 필드가 폼_데이터에 정확히 포함되어야 함\n"
             "- '수행한_작업'은 가독성 좋은 자연어 한 문자열(불릿/번호 허용)로 작성\n"
-            "- 지침(Instruction)에서 추출한 모든 원자 작업을 InputData(컨텍스트) 범위 내에서 수행\n"
+            "- 작업지시사항에서 추출한 모든 원자 작업을 입력 컨텍스트 범위 내에서 수행 (입력 컨텍스트 없으면 FAILED)\n"
             "- 다중 데이터 모드: is_multidata_mode=\"true\" 필드는 반드시 배열 형태로 반환(HTML의 실제 name 사용)\n"
-            "- 🚨 도구 실패, 파일 없음, 빈 결과 등은 작업 실패 사유가 아님 (InputData만 있으면 SUCCESS)\n\n"
+            "- 🚨 도구 실패, 파일 없음, 빈 결과 등은 작업 실패 사유가 아님 (입력 컨텍스트만 있으면 SUCCESS)\n\n"
             "섹션 4) 선택형(radio/select) 값 결정 지침\n"
             "- form_types에 HTML이 제공되면 해당 필드의 items를 HTML에서 파싱하여 실제 선택 가능한 값 목록 결정\n"
             "- items 예시: [{\"approve\":\"승인\"},{\"reject\":\"반려\"}] → 폼_데이터 값은 \"approve\" 또는 \"reject\" 중 하나여야 함\n\n"
@@ -624,22 +519,28 @@ class DynamicPromptGenerator:
             "- 필드명은 HTML의 name 속성을 그대로 사용하고, 해당 섹션의 모든 하위 필드들을 포함하여 배열 요소로 구성\n"
             "- 🚨 중요: multidata_field는 실제 HTML의 name 속성을 활용하세요. 임의로 생성하지 말고 HTML을 그대로 적극 활용하여 구조를 구성\n\n"
             "섹션 6) 실패(FAILED) 판단 기준 (🚨 핵심 규칙)\n"
-            "- ✅ **SUCCESS 조건**:\n"
-            "  * InputData(컨텍스트)가 있으면 → 도구 실패 무관하게 무조건 SUCCESS\n"
-            "  * InputData 없어도 sources/learned_knowledge 등 다른 컨텍스트가 있으면 → SUCCESS\n"
-            "  * InputData 없어도 도구로 데이터 수집 성공하면 → SUCCESS\n"
-            "- ❌ **FAILED 조건**:\n"
-            "  * 지침(Instruction)은 있는데 + InputData 없음 + 모든 도구 실패 + 다른 컨텍스트도 없음 → FAILED\n"
-            "  * 지침(Instruction) 자체가 없음 → FAILED\n"
-            "- 🚨 **FAILED 아닌 경우** (매우 중요!):\n"
-            "  * 파일 없음, URL 깨짐, 도구 실패, 검색 결과 없음 → FAILED 사유 아님\n"
-            "  * 도구(perplexity, supabase, gmail-mcp, mem0, memento, dmn_rule 등) 전부 실패 → InputData 있으면 SUCCESS\n"
-            "  * list_directory \"No files\", mem0 \"지식 없음\", dmn_rule \"규칙 없음\" → FAILED 사유 아님\n"
+            "- FAILED는 오직 입력 컨텍스트(텍스트/데이터)가 전혀 없을 때만 사용\n"
+            "- 파일 없음, URL 깨짐, 도구 실패, 검색 결과 없음 등은 FAILED 사유가 아님\n"
+            "- 입력 데이터(rfp_file_content, task_instructions 내 텍스트 등)가 있으면 반드시 SUCCESS로 완료\n"
+            "- 도구(perplexity, supabase, gmail-mcp, mcp-python-interpreter, mem0, memento, dmn_rule 등) 전부 실패해도 입력 컨텍스트 있으면 SUCCESS\n"
             "- FAILED 사용 시 반드시 '어떤 정보가 부족한지' 구체적으로 명시\n\n"
-            "섹션 7) 응답 형식\n"
+            "섹션 7) 응답 형식 (🚨 필수 규칙)\n"
             "- 오직 expected_output 객체(JSON)만 응답하세요. 다른 텍스트 포함 금지\n"
-            "예: {\n  \"상태\": \"SUCCESS\" 또는 \"FAILED\",\n  \"수행한_작업\": \"읽기 좋은 자연어 텍스트\",\n  \"폼_데이터\": { /* 폼 필드 키/값 (리포트/슬라이드 타입 제외) */ }\n}\n"
-            "- 문자열로 감싸지 말고, 백틱을 사용하지 마세요. 순수 JSON 객체만 반환하세요.\n"
+            "- 🚨 필수 최상위 키: \"상태\", \"수행한_작업\", \"폼_데이터\" (이 3개는 반드시 포함)\n"
+            "- 🚨 폼_데이터 내부 키: 반드시 form_fields의 'key' 값만 사용 ('text' 값 절대 사용 금지)\n"
+            "예시 구조:\n"
+            "{\n"
+            '  "상태": "SUCCESS" 또는 "FAILED",\n'
+            '  "수행한_작업": "읽기 좋은 자연어 텍스트",\n'
+            '  "폼_데이터": {\n'
+            '    "form_field_key_1": "값1",  // form_fields의 실제 key 사용\n'
+            '    "form_field_key_2": "값2"   // form_fields의 실제 key 사용\n'
+            "  }\n"
+            "}\n"
+            "- 🚨 절대 금지 사항:\n"
+            "  * 임의의 키 생성 (예: \"CS_내용\", \"분류_결과\", \"검토의견\" 등)\n"
+            "  * text 값을 키로 사용 (예: \"문의 유형\", \"검토 결과\" 등 한글 키)\n"
+            "  * 백틱/코드블록으로 감싸기 (순수 JSON 객체만 반환)\n"
             f"{report_slide_notice}"
         )
 
@@ -647,12 +548,8 @@ class DynamicPromptGenerator:
         """description 전용 시스템 프롬프트 생성"""
         return (
             "당신은 CrewAI Task description을 작성하는 전문가입니다.\n\n"
-            "역할: 주어진 정보를 바탕으로 에이전트가 수행할 구체적인 작업 지시(description)를 생성합니다.\n"
-            "핵심 원칙:\n"
-            "- 지침(Instruction): 무엇을 어떻게 할지 알려주는 작업 지침\n"
-            "- InputData: 실제 처리할 데이터 컨텍스트\n"
-            "- InputData가 있으면 도구 실패와 무관하게 작업 완료 가능\n"
-            "- 지침은 있는데 InputData 없고 모든 도구 실패 시에만 FAILED 처리 가능\n"
+            "역할: 주어진 컨텍스트 정보를 바탕으로 에이전트가 수행할 구체적인 작업 지시(description)를 생성합니다.\n"
+            "핵심 원칙: 도구 실패/파일 없음 등은 작업 실패 사유가 아니며, 입력 컨텍스트만 있으면 작업 완료 가능하도록 지시를 작성합니다.\n"
             "응답 형식: 설명 텍스트 한 문단으로만 응답하세요. 백틱/코드블록/JSON 포장 금지."
         )
 
@@ -661,10 +558,7 @@ class DynamicPromptGenerator:
         return (
             "당신은 CrewAI Task expected_output을 작성하는 전문가입니다.\n\n"
             "역할: 주어진 폼 정보(form_types/form_html)만을 바탕으로 결과 형식(expected_output)을 생성합니다.\n"
-            "핵심 원칙:\n"
-            "- SUCCESS: InputData(컨텍스트)가 있으면 도구 실패와 무관하게 무조건 SUCCESS\n"
-            "- FAILED: 지침은 있는데 InputData 없고 모든 도구 실패 + 다른 컨텍스트도 없을 때만 FAILED\n"
-            "- 도구 실패/파일 없음 등은 실패 사유가 아님\n"
+            "핵심 원칙: FAILED는 오직 입력 컨텍스트가 전혀 없을 때만 사용하며, 도구 실패/파일 없음 등은 실패 사유가 아닙니다.\n"
             "응답 형식: 오직 JSON 객체로만 응답하세요. 백틱/코드블록/문자열 포장 금지."
         )
     
@@ -693,4 +587,3 @@ class DynamicPromptGenerator:
                 logger.warning("⚠️ 에이전트 %s DMN 규칙 분석 실패: %s", role, e)
 
         return dmn_results
-
