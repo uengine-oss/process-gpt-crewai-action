@@ -24,6 +24,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # 3. Python 앱 설치
 WORKDIR /app
 COPY requirements.txt ./
+
+# pip 타임아웃 확대 (느린 네트워크/다운로드 시 EOF 방지)
+ENV PIP_DEFAULT_TIMEOUT=300
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 4. 애플리케이션 코드 복사 및 실행

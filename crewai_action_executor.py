@@ -410,7 +410,7 @@ class CrewAIActionExecutor(AgentExecutor):
             logger.info("🎉 CrewAI 실행 완료")
 
             # Deterministic 코드 생성
-            self._generate_deterministic(str(tenant_id), str(task_id))
+            # self._generate_deterministic(str(tenant_id), str(task_id))
 
         except Exception as e:
             logger.error(f"❌ CrewAI 실행 중 오류 발생: {e}", exc_info=True)
