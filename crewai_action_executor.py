@@ -259,10 +259,19 @@ class CrewAIActionExecutor(AgentExecutor):
             #     if handled:
             #         return
 
+            # 사용자 설정 도구/지식 우선순위: extras.agents[0].tool_priority (또는 tool_priority_order)
+            agents_list = extras.get("agents", [])
+            tool_priority_order = None
+            if agents_list:
+                first_agent = agents_list[0]
+                tool_priority_order = first_agent.get("tool_priority_order") or first_agent.get("tool_priority")
+                if not (isinstance(tool_priority_order, list) and len(tool_priority_order) > 0):
+                    tool_priority_order = None
+
             # CrewAI 실행
             logger.info("\n\n🤖 CrewAI Action 크루 생성 및 실행")
             crew = await create_crew(
-                agent_info=extras.get("agents", []),
+                agent_info=agents_list,
                 user_info=extras.get("users", []),
                 task_instructions=query,
                 form_types=extras.get("form_fields"),
@@ -271,7 +280,8 @@ class CrewAIActionExecutor(AgentExecutor):
                 feedback_summary=extras.get("summarized_feedback", ""),
                 tenant_mcp=extras.get("tenant_mcp"),
                 sources=extras.get("sources", []),
-                tenant_id=tenant_id
+                tenant_id=tenant_id,
+                tool_priority_order=tool_priority_order,
             )
             
             # 크루 실행

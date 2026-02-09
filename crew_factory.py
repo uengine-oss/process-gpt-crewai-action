@@ -9,6 +9,170 @@ from prompt_generator import DynamicPromptGenerator
 # 로깅 설정
 logger = logging.getLogger(__name__)
 
+# =============================
+# 도구 우선순위 정책
+# - "작업 플랜" 단계에서 먼저 고려해야 할 도구의 순서를 강제합니다.
+# - 스킬: agent_info.get("skills")로 정의되며, 실제 사용은 claude-skills/computer-use MCP 도구로 수행.
+# - 요구사항: (스킬이 있을 경우) 1) 스킬용 도구 2) dmn_rule 3) mem0 4) 기타 tools(memento/기타 MCP 등)
+#
+# 사용자 커스텀 우선순위 (agent_info.tool_priority_order):
+# - 형식: 문자열 리스트. 순서 = 우선순위(앞일수록 높음).
+# - 각 항목: 스킬명(에이전트에 할당된 스킬) 또는 MCP 서버명("claude-skills", "computer-use") 또는 도구명("dmn_rule", "mem0", "memento" 등).
+# - 스킬명: 내부에서 claude-skills/computer-use로 매핑. (추후 도구에 _processgpt_skill_id 태깅 시 스킬 간 우선순위 지원 예정)
+# - "*": 리스트에 포함 시, 나머지 미기재 도구는 이 위치에 묶임. 생략 시 미기재 도구는 맨 뒤.
+# - 예: ["quiz-management-skill", "dmn_rule", "mem0", "*"] 또는 ["claude-skills", "dmn_rule", "mem0", "*"]
+# - 제공하지 않거나 빈 리스트면 아래 기본 순서 사용.
+# =============================
+SKILL_MCP_SERVERS = {"claude-skills", "computer-use"}
+
+# 기본 도구 우선순위 (사용자 custom_order 없을 때 사용)
+DEFAULT_TOOL_PRIORITY_WITH_SKILLS = ["claude-skills", "computer-use", "dmn_rule", "mem0", "*"]
+DEFAULT_TOOL_PRIORITY_NO_SKILLS = ["dmn_rule", "mem0", "*"]
+
+
+class TaggedSafeToolLoader(SafeToolLoader):
+    """MCP 서버 출처를 Tool 객체에 태깅하는 SafeToolLoader 래퍼.
+
+    crewai_tools.MCPServerAdapter가 반환하는 Tool 객체는 기본적으로 '어느 MCP 서버에서 왔는지' 정보가 없어서
+    우선순위 정렬을 위해 서버 키를 attribute로 주입합니다.
+    """
+
+    def _load_mcp_tool(self, tool_name: str) -> List:
+        tools = super()._load_mcp_tool(tool_name)
+        for t in tools or []:
+            try:
+                setattr(t, "_processgpt_mcp_server", tool_name)
+            except Exception:
+                # 일부 Tool 구현은 setattr이 막혀 있을 수 있어 무시합니다.
+                pass
+        return tools
+
+
+def _get_tool_name(tool) -> str:
+    name = getattr(tool, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return tool.__class__.__name__
+
+
+def _get_agent_skill_names(skills) -> List[str]:
+    """agent_info['skills']에서 스킬명/ID 리스트 추출.
+
+    지원 형식: 문자열(쉼표 구분), 리스트[문자열], 리스트[dict with name/id].
+    """
+    if not skills:
+        return []
+    result = []
+    if isinstance(skills, str):
+        result.extend(s.strip() for s in skills.split(",") if s.strip())
+    elif isinstance(skills, list):
+        for x in skills:
+            if isinstance(x, str) and x.strip():
+                result.append(x.strip())
+            elif isinstance(x, dict):
+                name = x.get("name") or x.get("id") or x.get("skill_id")
+                if name and str(name).strip():
+                    result.append(str(name).strip())
+    return list(dict.fromkeys(result))
+
+
+def _normalize_tool_priority_for_sorting(
+    custom_order: List[str],
+    agent_skills: List[str],
+) -> tuple:
+    """custom_order를 우선순위 정렬용 idx_map으로 변환.
+
+    - 스킬명(agent_skills에 있음): claude-skills, computer-use로 확장(동일 우선순위).
+      추후 도구에 _processgpt_skill_id 태깅 시 스킬명 직접 매칭 가능하도록 스킬명도 idx_map에 포함.
+    - 여러 스킬이 있을 때: 첫 번째 스킬의 위치에 MCP 매핑(현재는 MCP 단위만 구분 가능).
+    반환: (idx_map: Dict[str, int], wildcard_idx: int)
+    """
+    agent_skills_set = {s.lower() for s in agent_skills if s}
+    idx_map: Dict[str, int] = {}
+    wildcard_idx = 0
+    for i, item in enumerate(custom_order):
+        if not isinstance(item, str) or not item.strip():
+            continue
+        key = item.strip().lower()
+        if key == "*":
+            wildcard_idx = i
+            idx_map["*"] = i
+            continue
+        if key in agent_skills_set:
+            # 스킬 → MCP 매핑(첫 등장 시에만, 스킬 간 우선순위가 동일하게 적용되도록)
+            for mcp in SKILL_MCP_SERVERS:
+                if mcp not in idx_map:
+                    idx_map[mcp] = i
+            # 추후 스킬별 도구 태깅 지원용
+            idx_map[key] = i
+        else:
+            idx_map[key] = i
+    if "*" not in idx_map:
+        wildcard_idx = max(idx_map.values(), default=-1) + 1
+    return idx_map, wildcard_idx
+
+
+def _tool_identity(tool) -> str:
+    """도구의 우선순위 매칭용 식별자: MCP 서버명 또는 도구명.
+
+    추후: getattr(tool, "_processgpt_skill_id", None)가 있으면 스킬별 매칭 지원 가능.
+    """
+    server = getattr(tool, "_processgpt_mcp_server", None)
+    if isinstance(server, str) and server.strip():
+        return server.strip().lower()
+    return _get_tool_name(tool).lower()
+
+
+def prioritize_tools(
+    tools: List,
+    has_skills: bool = False,
+    custom_order: Optional[List[str]] = None,
+    agent_skills: Optional[List[str]] = None,
+) -> List:
+    """도구 우선순위 정렬(안정 정렬).
+
+    has_skills: agent_info.get("skills")가 있을 때 True. custom_order 없을 때만 사용.
+    custom_order: 사용자 지정 우선순위 리스트(앞일수록 높음). 스킬명, MCP명, 도구명 혼합 가능.
+    agent_skills: 에이전트에 할당된 스킬명 리스트. custom_order의 스킬명을 MCP로 매핑할 때 사용.
+    """
+    if not tools:
+        return []
+
+    if custom_order and len(custom_order) > 0:
+        order_list = [s.strip() for s in custom_order if isinstance(s, str) and s.strip()]
+        if not order_list:
+            custom_order = None
+        else:
+            skills = agent_skills or []
+            idx_map, wildcard_idx = _normalize_tool_priority_for_sorting(order_list, skills)
+
+            def sort_key(it):
+                idx, t = it
+                identity = _tool_identity(t)
+                priority = idx_map.get(identity, wildcard_idx)
+                return (priority, idx)
+
+            indexed = list(enumerate(tools))
+            indexed.sort(key=sort_key)
+            return [t for _, t in indexed]
+
+    # 기본 우선순위(커스텀 없을 때)
+    def bucket(t) -> int:
+        server = getattr(t, "_processgpt_mcp_server", None)
+        if has_skills and isinstance(server, str) and server.strip().lower() in SKILL_MCP_SERVERS:
+            return 0
+        n = _get_tool_name(t).lower()
+        if n == "dmn_rule":
+            return 1
+        if n == "mem0":
+            return 2
+        return 3
+
+    indexed = list(enumerate(tools))
+    indexed.sort(key=lambda it: (bucket(it[1]), it[0]))
+    return [t for _, t in indexed]
+
+
 # MCP/HTTP 연결 오류를 위한 예외 타입 임포트 시도
 try:
     import httpx
@@ -77,6 +241,7 @@ async def create_user_task(
     agent_info: List[Dict] | None = None,
     user_info: List[Dict] | None = None,
     sources: List[Dict] | None = None,
+    tool_priority_order: Optional[List[str]] = None,
 ) -> Task:
     """사용자 요청을 바탕으로 동적 프롬프트 생성하여 단일 Task 생성"""
     try:
@@ -97,7 +262,8 @@ async def create_user_task(
             feedback_summary=feedback_summary,
             current_activity_name=current_activity_name,
             user_info=user_info or [],
-            sources=sources or []
+            sources=sources or [],
+            tool_priority_order=tool_priority_order,
         )
         
         # 플래닝에서 필요한 InputData 원본만 description 뒤에 덧붙인다 (Description/Instruction은 제외)
@@ -137,6 +303,7 @@ async def create_crew(
     tenant_mcp: Dict | None = None,
     sources: List[Dict] | None = None,
     tenant_id: str = "",
+    tool_priority_order: Optional[List[str]] = None,
 ):
     """에이전트/태스크를 구성해 크루를 생성합니다."""
     try:
@@ -169,13 +336,19 @@ async def create_crew(
                 tools_str = info.get('tools', '')
                 tool_names = [tool.strip() for tool in tools_str.split(',') if tool.strip()] if tools_str else []
                 agent_name = info.get('username', 'unknown')
-                logger.info(f"🔧 에이전트 '{agent_name}') 툴 목록: {tool_names}")
+                has_skills = bool(info.get('skills'))  # 스킬 보유 시 claude-skills/computer-use 도구를 1순위로 정렬
+                custom_order = info.get('tool_priority_order') or info.get('tool_priority')
+                if not (isinstance(custom_order, list) and len(custom_order) > 0):
+                    custom_order = None
+                agent_skills = _get_agent_skill_names(info.get('skills'))
+                logger.info(f"🔧 에이전트 '{agent_name}') 툴 목록: {tool_names}, 스킬 보유: {has_skills}, 커스텀 우선순위: {bool(custom_order)}")
                 
                 tools = []
                 loader = None
                 try:
-                    loader = SafeToolLoader(tenant_id=tenant_id, user_id=user_id, agent_name=agent_name, mcp_config=tenant_mcp)
+                    loader = TaggedSafeToolLoader(tenant_id=tenant_id, user_id=user_id, agent_name=agent_name, mcp_config=tenant_mcp)
                     tools = loader.create_tools_from_names(tool_names)
+                    tools = prioritize_tools(tools, has_skills=has_skills, custom_order=custom_order, agent_skills=agent_skills)
                     logger.info(f"✅ 에이전트 '{agent_name}') 툴 로딩 성공: {len(tools)}개")
                 except HTTP_CONNECTION_ERRORS as e:
                     # HTTP/MCP 연결 오류인 경우 - 도구 없이 계속 진행
@@ -216,7 +389,23 @@ async def create_crew(
             agents.append(default_agent)
         
         manager = agents[0]
-        
+
+        # 매니저(첫 에이전트) 기준 도구 우선순위: 인자로 넘어온 값 > 첫 에이전트 설정 > 기본
+        first_info = agent_info[0] if agent_info else {}
+        has_skills_0 = bool(first_info.get("skills"))
+        first_agent_skills = _get_agent_skill_names(first_info.get("skills"))
+        effective_priority_order = tool_priority_order
+        if not (isinstance(effective_priority_order, list) and len(effective_priority_order) > 0):
+            effective_priority_order = first_info.get("tool_priority_order") or first_info.get("tool_priority")
+        if not (isinstance(effective_priority_order, list) and len(effective_priority_order) > 0):
+            if has_skills_0 and first_agent_skills:
+                # 스킬이 있으면 첫 스킬명을 사용해 기본 순서 구성(프롬프트 표시용)
+                effective_priority_order = [first_agent_skills[0], "dmn_rule", "mem0", "*"]
+            else:
+                effective_priority_order = (
+                    DEFAULT_TOOL_PRIORITY_WITH_SKILLS if has_skills_0 else DEFAULT_TOOL_PRIORITY_NO_SKILLS
+                )
+
         # 사용자 요청 기반 태스크 생성 (매니저 에이전트에 할당)
         task = await create_user_task(
             task_instructions=task_instructions,
@@ -227,7 +416,8 @@ async def create_crew(
             feedback_summary=feedback_summary,
             agent_info=agent_info,  # 원본 딕셔너리 리스트 전달
             user_info=user_info,
-            sources=sources
+            sources=sources,
+            tool_priority_order=effective_priority_order,
         )
         logger.info("\n\n✅ 사용자 태스크 생성 완료")
         

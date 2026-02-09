@@ -2,6 +2,7 @@ import time
 import json
 import logging
 import asyncio
+import re
 from typing import Dict, List, Optional, Any, Tuple
 from processgpt_agent_utils.tools.dmn_rule_tool import DMNRuleTool
 from processgpt_agent_utils.tools.knowledge_manager import Mem0Tool
@@ -27,8 +28,12 @@ class DynamicPromptGenerator:
         current_activity_name: str = "",
         user_info: Optional[List[Dict]] = None,
         sources: List[Dict] | None = None,
+        tool_priority_order: Optional[List[str]] = None,
     ) -> Tuple[str, str]:
         """두 LLM 호출로 설명/결과물을 분리 생성하고 asyncio.gather로 병렬 실행."""
+
+        # 작업 지시사항 기반 액션성 여부 간단 분류
+        is_action_like = self._is_action_like(task_instructions)
 
         learned_knowledge = self._collect_learned_knowledge(
             agent_info=agent_info,
@@ -52,6 +57,8 @@ class DynamicPromptGenerator:
             dmn_analysis=dmn_analysis,
             form_types=form_types,
             sources=sources,
+            is_action_like=is_action_like,
+            tool_priority_order=tool_priority_order,
         )
 
         # 결과물용 브리프: 폼 정보만 포함
@@ -94,6 +101,37 @@ class DynamicPromptGenerator:
     # ----------------------------
     # 내부 로직
     # ----------------------------
+    def _is_action_like(self, task_instructions: str) -> bool:
+        """작업 지시사항이 실제 액션/조회/실행 계열인지 간단히 분류."""
+        if not task_instructions or not isinstance(task_instructions, str):
+            return False
+
+        text = task_instructions.strip()
+        lower = text.lower()
+
+        # 한국어/영어 공통 액션성 키워드 (조회/실행/호출/저장/전송 등)
+        action_keywords = [
+            "조회", "호출", "실행", "보내줘", "보내 줘", "전송", "발송",
+            "저장", "수정", "삭제", "등록", "추가", "생성",
+            "call", "invoke", "execute", "run", "fetch", "query",
+        ]
+        api_indicators = [
+            "api", "엔드포인트", "endpoint", "rest", "http", "https",
+            "토큰", "token", "키:", "key:", "access_token",
+        ]
+
+        # 단순 키워드 매칭
+        if any(kw in text for kw in action_keywords):
+            return True
+        if any(kw in lower for kw in api_indicators):
+            return True
+
+        # 코스피/환율/지수 조회 등 금융 데이터 패턴
+        if re.search(r"(코스피|지수|환율|주가).*(조회|query|fetch)", text):
+            return True
+
+        return False
+
     def _collect_learned_knowledge(
         self,
         agent_info: List[Dict],
@@ -138,12 +176,94 @@ class DynamicPromptGenerator:
         dmn_analysis: Dict[str, str],
         form_types: Optional[Dict] = None,
         sources: List[Dict] | None = None,
+        is_action_like: bool = False,
+        tool_priority_order: Optional[List[str]] = None,
     ) -> str:
         """설명 프롬프트: form_types/form_html 제외, 나머지 컨텍스트를 원문 스타일로 포함."""
         
         has_feedback = bool(feedback_summary and feedback_summary.strip() and feedback_summary.strip() != '없음')
         has_learned = bool(learned_knowledge and any(str(v).strip() for v in learned_knowledge.values()))
         has_dmn = bool(dmn_analysis and any(str(v).strip() for v in dmn_analysis.values()))
+        has_skills = bool(agent_info and any(ag.get("skills") for ag in agent_info))  # agent_info["skills"] 보유 시 스킬 도구 1순위
+        # 에이전트별 할당 스킬 ID 수집 (쉼표 구분 문자열 또는 리스트)
+        assigned_skill_ids = []
+        for ag in agent_info or []:
+            s = ag.get("skills")
+            if not s:
+                continue
+            if isinstance(s, str):
+                assigned_skill_ids.extend(sk.strip() for sk in s.split(",") if sk.strip())
+            elif isinstance(s, list):
+                assigned_skill_ids.extend(str(x).strip() for x in s if str(x).strip())
+        assigned_skill_ids = list(dict.fromkeys(assigned_skill_ids))
+        has_assigned_skills = bool(assigned_skill_ids)
+        assigned_skills_text = ", ".join(assigned_skill_ids) if assigned_skill_ids else "없음"
+
+        # 액션형 작업에서의 스킬 활용 설명 텍스트
+        if has_assigned_skills and is_action_like:
+            skill_usage_text = (
+                "이 작업은 API 호출/데이터 조회/실행 등 **액션형 작업**입니다. "
+                "작업 계획 수립 및 실행 시 **반드시** 다음 순서를 따르세요: "
+                "1) **read_skill_document** 등으로 **위 스킬 ID(들)**의 문서를 **먼저** 읽고 "
+                "2) 스킬 문서에서 제시한 **실제 코드 파일/함수/엔드포인트**를 식별한 뒤 "
+                "3) 코드 실행 도구(run_shell, run_node 등)로 **실제 코드를 실행**하고 "
+                "4) 실행 결과(예: 코스피 지수, 상태 값, 응답 데이터)를 최종 결과에 포함할 것. "
+                "단순히 '어떻게 하면 되는지' 절차를 설명만 하고 실제 코드를 실행하지 않으면 작업은 **실패로 간주**됩니다. "
+                "할당된 스킬을 모두 사용/실행한 뒤에, 필요할 때만 보완용으로 find_helpful_skills를 사용할 수 있습니다."
+            )
+        elif has_assigned_skills:
+            skill_usage_text = (
+                "작업 계획 수립 및 실행 시 **read_skill_document** 등으로 **위 스킬 ID(들)**의 문서를 "
+                "**먼저** 읽고, 그 스킬의 절차/가이드에 따라 작업할 것. "
+                "find_helpful_skills로 다른 스킬을 검색하기 **전에** 할당된 스킬을 우선 사용할 것. "
+                "(예: 할당 스킬이 global-investment-analyzer이면 read_skill_document로 해당 스킬 문서를 먼저 읽고 그 절차에 따름)"
+            )
+        else:
+            skill_usage_text = (
+                "할당된 스킬이 없으면 필요 시 find_helpful_skills 등으로 스킬을 탐색할 수 있음."
+            )
+
+        # 도구 우선순위 문구: 사용자 지정이 있으면 그대로 반영, 없으면 기본 문구
+        # claude-skills/computer-use는 프롬프트에 "할당된 스킬"로 표시(스킬명이 저장 포맷으로 오면 그대로 사용)
+        if tool_priority_order and len(tool_priority_order) > 0:
+            priority_labels = []
+            for x in tool_priority_order:
+                if not isinstance(x, str) or not x.strip():
+                    continue
+                s = x.strip()
+                if s == "*":
+                    priority_labels.append("기타 도구")
+                elif s.lower() in ("claude-skills", "computer-use"):
+                    priority_labels.append("할당된 스킬")
+                else:
+                    priority_labels.append(s)
+            tool_priority_display = " ".join(f"{i + 1}) {lb}" for i, lb in enumerate(priority_labels)) if priority_labels else "1) 할당된 스킬 2) dmn_rule 3) mem0 4) 기타 도구"
+        else:
+            tool_priority_display = "1) 할당된 스킬(read_skill_document로 해당 스킬 ID 먼저 사용) 2) dmn_rule 3) mem0 4) 기타 tools(memento, find_helpful_skills 등 그 외 MCP/기타 도구)"
+        # 액션형 + 자유 형식(free-form)일 때 추가 성공 기준 안내
+        is_free_form = not bool(form_types)
+        if is_action_like and is_free_form:
+            action_success_section = """
+- 액션형 작업이며 별도의 form_types가 없는 자유 형식 응답인 경우, 최종 응답은 다음 조건을 모두 만족해야 합니다:
+  * 실제 도구/코드 실행 결과(예: 코스피 지수 숫자, 조회 시점, 상태 코드 등)를 포함할 것
+  * 사용한 스킬/도구 이름과 핵심 파라미터(API key 등)를 간단히 설명할 것
+  * 단순히 \"어떻게 조회/호출하면 되는지\"에 대한 절차나 계획만 설명하는 응답은 **실패**로 간주되며, 반드시 실제 조회/호출을 수행해야 함
+"""
+        else:
+            action_success_section = ""
+
+        # 액션형 + 스킬 보유 시 도구 활용 섹션에 추가로 명시할 규칙
+        if is_action_like and has_assigned_skills:
+            skill_action_rule_text = """
+- **액션형 작업 + 할당 스킬 사용 필수 (🚨 핵심 규칙):**
+  * 이 작업이 API 호출/데이터 조회/외부 서비스 실행 등 액션 성격이라면, 할당된 스킬 문서는 단순 참고용이 아니라 **실제 실행 지침**입니다.
+  * 반드시 다음 순서를 따르세요: read_skill_document로 스킬 문서 읽기 → 문서에서 제시한 코드 파일/함수/엔드포인트 식별 → 코드 실행 도구(run_shell, run_node 등)로 실제 실행 → 실행 결과(예: 코스피 지수, 응답 데이터)를 최종 응답에 포함.
+  * 단순히 \"API를 이렇게 호출하면 된다\"는 식의 설명/플랜만 반환하는 것은 허용되지 않으며, 실제 호출/실행이 없으면 작업은 실패로 간주됩니다.
+  * 할당된 스킬이 있는 경우, find_helpful_skills로 시작하는 것은 금지이며, 스킬 문서 기반 실행 이후에만 보완용으로 사용할 수 있습니다.
+"""
+        else:
+            skill_action_rule_text = ""
+
         agent_info_json = json.dumps(agent_info or [], ensure_ascii=False, indent=2) if agent_info else '정보 없음'
         user_info_json = json.dumps(user_info or [], ensure_ascii=False, indent=2) if user_info else '정보 없음'
         learned_json = json.dumps(learned_knowledge or {}, ensure_ascii=False, indent=2) if has_learned else '관련 경험 없음'
@@ -258,6 +378,11 @@ class DynamicPromptGenerator:
 - 역할: 협업할 에이전트들의 역할, ID, 테넌트 정보 제공
 - 활용: 각 에이전트의 전문성을 고려한 작업 분배 및 협업 지시에 사용
 
+**에이전트 할당 스킬 (agent_info.skills) — 🚨 스킬 사용 시 필수:**
+- 값: {assigned_skills_text}
+- 역할: 이 에이전트(들)에게 **할당된 스킬 ID**. 할당된 스킬이 있으면 작업 수행 시 반드시 이 스킬을 최우선으로 사용함.
+- 활용: {skill_usage_text}
+
 **담당자(Owner) (user_info):**
 - 값: {user_info_json}
 - 역할: 현재 업무의 실제 담당자 정보(담당자 표기, 연락/검토 지점 반영)
@@ -344,6 +469,7 @@ class DynamicPromptGenerator:
 
 **작업 지시사항 분석 및 구체화 원칙:**
 - 작업 지시사항(task_instructions)을 먼저 분석하여 요청의 성격과 구체성을 판단하세요
+- **에이전트 할당 스킬(agent_info.skills)이 있으면**, 생성하는 Task description에 **반드시** 첫 단계로 다음을 포함할 것: "먼저 read_skill_document(또는 해당 도구)로 [할당 스킬 ID] 스킬 문서를 읽고, 그 스킬의 절차/가이드에 따라 작업을 수행할 것." (할당 스킬이 여러 개면 우선 사용할 하나 이상을 명시)
 - 작업 지시사항이 모호하거나 단순한 요청 형태(예: "PPT 만들어줘", "보고서 작성해줘" 등)인 경우, 실제 수행 가능한 구체적인 단계로 세분화하여 Task description을 작성하세요
 - 단순 지시를 그대로 재진술하지 말고, 다음을 포함한 실행 가능한 상세 액션 플랜을 작성하세요:
   * 파일 생성, 실행, 업로드, URL 제공 등 필수 절차의 명확한 정의
@@ -354,6 +480,11 @@ class DynamicPromptGenerator:
 - 작업 지시사항이 이미 구체적이고 상세한 경우에는 그대로 반영하되, 누락된 실행 단계가 있다면 보완하세요
 
 **도구 활용 기본 원칙:**
+- **도구/스킬 우선순위 (작업 플랜 수립 및 실행 공통, 🚨 요구사항):**
+  * **할당 스킬 우선**: 에이전트에게 할당된 스킬 ID(agent_info.skills, 위 "에이전트 할당 스킬" 참고)가 있으면, **반드시** read_skill_document 등으로 **그 스킬 ID**를 먼저 호출하여 해당 스킬 문서를 읽고, 그 스킬의 절차에 따라 수행할 것. find_helpful_skills로 다른 스킬을 검색하는 것은 할당된 스킬 적용 후 필요 시에만 사용할 것.
+  * 우선순위: **{tool_priority_display}**
+  * 동일 목표를 달성할 수 있다면, 항상 더 높은 우선순위의 도구를 먼저 시도하고 필요 시 하위 우선순위로 내려갈 것
+{skill_action_rule_text}
 - 제공된 도구와 스킬은 가능한 한 광범위하게 모두 활용하여 정보 수집과 작업 수행 정확도를 높일 것
 - 실행형 도구가 의존성·환경 오류를 보고하면 즉시 'run_shell' 등 환경 설정 도구로 필요한 패키지 설치·설정을 수행하고, 동일 작업을 재시도하여 성공 여부를 확인
 - 특정 도구 사용이 실패하거나 제한되는 경우, 동일 목표를 달성할 수 있는 다른 도구/스킬을 즉시 탐색하여 대체 실행
@@ -397,6 +528,7 @@ class DynamicPromptGenerator:
 {('- 피드백 내용을 100% 반영하여 처리' if has_feedback else '')}
 - 요구된 형식으로 결과 제공
 - 작업 범위 엄수 확인
+{action_success_section}
 """
 
     def _build_expected_output_prompt(
