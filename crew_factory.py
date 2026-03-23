@@ -1,7 +1,8 @@
+import os
 from typing import Optional, List, Dict
 import logging
 from crewai import Crew, Process, Agent, Task
-from llm_factory import create_llm
+from llm import create_llm
 from processgpt_agent_utils.utils.crew_event_logger import CrewConfigManager
 from processgpt_agent_utils.tools.safe_tool_loader import SafeToolLoader
 from prompt_generator import DynamicPromptGenerator
@@ -199,12 +200,10 @@ class AgentWithProfile(Agent):
 def create_dynamic_agent(agent_info: Dict, tools: List) -> AgentWithProfile:
     """에이전트 정보를 바탕으로 동적으로 Agent 객체 생성"""
     try:
-        model_str = agent_info.get("model") or "gpt-4.1"
-        provider = model_str.split("/", 1)[0] if "/" in model_str else None
-        model_name = model_str.split("/", 1)[1] if "/" in model_str else model_str
+        model_str = agent_info.get("model") or os.getenv("LLM_MODEL") or ""
+        model_name = model_str.split("/", 1)[1] if "/" in model_str else (model_str or None)
 
         llm_instance = create_llm(
-            provider=provider,
             model=model_name,
             temperature=0.1
         )

@@ -155,7 +155,15 @@ deactivate
 ### 2. 환경변수 설정
 `.env` 파일에 필요한 환경변수 설정:
 ```bash
-# OpenAI API 설정
+# LLM 호출 설정 (llm.py 기준)
+# - model 미지정 시 LLM_MODEL 사용
+LLM_MODEL=gpt-4o
+
+# LiteLLM Proxy 설정
+LLM_PROXY_URL=http://litellm-proxy:4000
+LLM_PROXY_API_KEY=sk-your_virtual_key_here
+
+# 선택: LLM_PROXY_API_KEY가 없을 때 fallback 용도
 OPENAI_API_KEY=your_openai_api_key_here
 
 # LANGSMITH 설정 (선택사항)
