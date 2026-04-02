@@ -1,3 +1,5 @@
+> **전체 설치 및 실행 방법은 메인 프로젝트를 참고하세요:** [ProcessGPT](https://github.com/uengine-oss/process-gpt)
+
 # CrewAI Action 서버
 
 CrewAI를 활용한 자연어 처리 액션 서버입니다. 사용자의 요청을 받아 CrewAI 에이전트들이 협업하여 작업을 수행하고 결과를 반환합니다.
